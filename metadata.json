@@ -1,0 +1,8 @@
+{
+  "name": "Spark Analytic (Spark)",
+  "description": "Unlocking Sales Potential: Transform unstructured sales interactions into rigorous behavioral analytics, predictive deal-success forecasting, and immediate Milton Model coaching interventions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Default-Deny Catch-All Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ID Validation Helper
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Sessions Collection Rules
+    match /sessions/{sessionId} {
+      allow get: if isValidId(sessionId);
+      allow list: if true;
+      allow create, update: if isValidId(sessionId) && request.resource.data.id == sessionId;
+      allow delete: if isValidId(sessionId);
+    }
+
+    // Multi-tenant Sessions Rules
+    match /tenants/{tenantId}/sessions/{sessionId} {
+      allow get: if isValidId(tenantId) && isValidId(sessionId);
+      allow list: if isValidId(tenantId);
+      allow create, update: if isValidId(tenantId) && isValidId(sessionId) && request.resource.data.id == sessionId && request.resource.data.tenantId == tenantId;
+      allow delete: if isValidId(tenantId) && isValidId(sessionId);
+    }
+
+    // Tickets Collection Rules
+    match /tickets/{ticketId} {
+      allow get: if isValidId(ticketId);
+      allow list: if true;
+      allow create, update: if isValidId(ticketId) && request.resource.data.id == ticketId;
+      allow delete: if isValidId(ticketId);
+    }
+
+    // Multi-tenant Billing Rules
+    match /tenants/{tenantId}/billing/details {
+      allow get: if isValidId(tenantId);
+      allow create, update: if isValidId(tenantId);
+      allow delete: if isValidId(tenantId);
+    }
+  }
+}

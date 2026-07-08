@@ -1,0 +1,153 @@
+{
+  "entities": {
+    "CallSession": {
+      "title": "CallSession",
+      "description": "Represents an analyzed sales call session with conversational diagnostics.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The unique call session ID."
+        },
+        "title": {
+          "type": "string",
+          "description": "Descriptive title of the call."
+        },
+        "customerName": {
+          "type": "string",
+          "description": "The customer's full name."
+        },
+        "repName": {
+          "type": "string",
+          "description": "The representative's full name."
+        },
+        "date": {
+          "type": "string",
+          "description": "The date and time of the call."
+        },
+        "transcriptText": {
+          "type": "string",
+          "description": "The raw word-for-word conversational transcript text."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "analyzed", "failed"],
+          "description": "Processing status of the transcript analytics."
+        },
+        "tenantId": {
+          "type": "string",
+          "description": "The simulated multi-tenant ID."
+        }
+      },
+      "required": ["id", "title", "customerName", "repName", "date", "status"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Represents an inbound support ticket created by enterprise customer portals.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The unique ticket ID."
+        },
+        "title": {
+          "type": "string",
+          "description": "The subject/title of the inquiry."
+        },
+        "tenantId": {
+          "type": "string",
+          "description": "The tenant ID."
+        },
+        "tenantName": {
+          "type": "string",
+          "description": "The name of the tenant."
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["HIGH", "MEDIUM", "LOW"],
+          "description": "Severity level of the ticket."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Open", "In Progress", "Resolved"],
+          "description": "Resolution status."
+        },
+        "customerMessage": {
+          "type": "string",
+          "description": "Detailed text body describing the complaint or problem."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp when the ticket was generated."
+        }
+      },
+      "required": ["id", "title", "tenantId", "tenantName", "priority", "status", "customerMessage", "createdAt"]
+    },
+    "BillingDetails": {
+      "title": "BillingDetails",
+      "description": "Represents secure payment details, credit card and billing contacts for multi-tenant subscription isolation.",
+      "type": "object",
+      "properties": {
+        "contactName": {
+          "type": "string",
+          "description": "The billing contact person's full name."
+        },
+        "email": {
+          "type": "string",
+          "description": "Billing communication email."
+        },
+        "phone": {
+          "type": "string",
+          "description": "Billing contact telephone number."
+        },
+        "address": {
+          "type": "string",
+          "description": "Street address of the paying entity."
+        },
+        "city": {
+          "type": "string",
+          "description": "City of the paying entity."
+        },
+        "state": {
+          "type": "string",
+          "description": "State code or province name."
+        },
+        "zipCode": {
+          "type": "string",
+          "description": "Postal or Zip Code."
+        },
+        "cardNumber": {
+          "type": "string",
+          "description": "Masked credit card number (e.g. **** **** **** 4111) or mock payment digit inputs."
+        },
+        "cardExpiry": {
+          "type": "string",
+          "description": "Credit card expiration date (MM/YY)."
+        },
+        "cardCvv": {
+          "type": "string",
+          "description": "Security CVV/CVC code (3 or 4 digits)."
+        }
+      },
+      "required": ["contactName", "email", "phone", "address", "city", "state", "zipCode", "cardNumber", "cardExpiry", "cardCvv"]
+    }
+  },
+  "firestore": {
+    "/sessions/{sessionId}": {
+      "schema": "CallSession",
+      "description": "Root collection for all simulated sales call dialogue sessions."
+    },
+    "/tenants/{tenantId}/sessions/{sessionId}": {
+      "schema": "CallSession",
+      "description": "Multi-tenant partitioned sales dialogue session collection."
+    },
+    "/tickets/{ticketId}": {
+      "schema": "SupportTicket",
+      "description": "Global support tickets synced between customer facing portals and help desks."
+    },
+    "/tenants/{tenantId}/billing/details": {
+      "schema": "BillingDetails",
+      "description": "Subscription billing contacts and credit/debit payment details partition."
+    }
+  }
+}
