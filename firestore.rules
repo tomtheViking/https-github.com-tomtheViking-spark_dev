@@ -13,33 +13,72 @@ service cloud.firestore {
 
     // Sessions Collection Rules
     match /sessions/{sessionId} {
-      allow get: if isValidId(sessionId);
-      allow list: if true;
+      allow read: if true;
       allow create, update: if isValidId(sessionId) && request.resource.data.id == sessionId;
       allow delete: if isValidId(sessionId);
     }
 
     // Multi-tenant Sessions Rules
     match /tenants/{tenantId}/sessions/{sessionId} {
-      allow get: if isValidId(tenantId) && isValidId(sessionId);
-      allow list: if isValidId(tenantId);
+      allow read: if true;
       allow create, update: if isValidId(tenantId) && isValidId(sessionId) && request.resource.data.id == sessionId && request.resource.data.tenantId == tenantId;
       allow delete: if isValidId(tenantId) && isValidId(sessionId);
     }
 
     // Tickets Collection Rules
     match /tickets/{ticketId} {
-      allow get: if isValidId(ticketId);
-      allow list: if true;
+      allow read: if true;
       allow create, update: if isValidId(ticketId) && request.resource.data.id == ticketId;
       allow delete: if isValidId(ticketId);
     }
 
     // Multi-tenant Billing Rules
     match /tenants/{tenantId}/billing/details {
-      allow get: if isValidId(tenantId);
+      allow read: if true;
       allow create, update: if isValidId(tenantId);
       allow delete: if isValidId(tenantId);
+    }
+
+    // Users Collection Rules for Invitations & User Enrollment
+    match /users/{userId} {
+      allow read: if true;
+      allow create, update: if isValidId(userId) &&
+        request.resource.data.email is string &&
+        request.resource.data.email.size() > 0 &&
+        request.resource.data.email.size() <= 256 &&
+        request.resource.data.tenant_id is string &&
+        request.resource.data.tenant_id.size() > 0 &&
+        request.resource.data.tenant_id.size() <= 128 &&
+        request.resource.data.role is string &&
+        request.resource.data.role.size() > 0 &&
+        request.resource.data.role.size() <= 64 &&
+        request.resource.data.enrollment_status is string &&
+        (request.resource.data.enrollment_status == "invited" || request.resource.data.enrollment_status == "active") &&
+        request.resource.data.created_at is string &&
+        request.resource.data.created_at.size() > 0 &&
+        request.resource.data.created_at.size() <= 64;
+      allow delete: if isValidId(userId);
+    }
+
+    // Tenants Collection Rules
+    match /tenants/{tenantId} {
+      allow read: if true;
+      allow create, update: if isValidId(tenantId) && request.resource.data.id == tenantId;
+      allow delete: if isValidId(tenantId);
+    }
+
+    // Transcripts Collection Rules
+    match /transcripts/{transcriptId} {
+      allow read: if true;
+      allow create, update: if isValidId(transcriptId) && request.resource.data.id == transcriptId;
+      allow delete: if isValidId(transcriptId);
+    }
+
+    // Alerts Collection Rules
+    match /alerts/{alertId} {
+      allow read: if true;
+      allow create, update: if isValidId(alertId) && request.resource.data.id == alertId;
+      allow delete: if isValidId(alertId);
     }
   }
 }

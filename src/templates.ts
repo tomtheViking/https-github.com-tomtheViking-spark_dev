@@ -274,7 +274,7 @@ Representative (Marcus): Wonderful. Have a fantastic board meeting, Elena! I wil
           originalText: "Traditional ATS keyword filters miss the top 40% of non-linear resumes, meaning you might be pitching sub-optimal pipelines to your board today.",
           frameworkApplied: "Presupposition & Empathy Pacing",
           correctedText: "As you sit down with your board today to discuss Apex's growth, you are probably looking for ways to maximize the talent pool. When keyword filters accidentally filter out high-potential candidates, it makes reporting a lot harder than it needs to be.",
-          explanation: "The original statement was slightly aggressive ('meaning you might be pitching sub-optimal pipelines today'). While it got her attention, a softer Milton presupposition paired with empathy prevents defensive backlash while keeping the urgency high."
+          explanation: "The original statement was slightly aggressive ('meaning you might be pitching sub-optimal pipelines today'). While it got her attention, a softer conversational presupposition paired with empathy prevents defensive backlash while keeping the urgency high."
         }
       ],
       nextSteps: [

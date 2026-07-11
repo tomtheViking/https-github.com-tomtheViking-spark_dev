@@ -50,7 +50,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { SupportTicket, CallSession } from "../types";
 import InteractiveDashboard from "./InteractiveDashboard";
 import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot, collection, setDoc, query, where, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
@@ -406,7 +406,35 @@ export default function SupportDashboard({
   const [activeSupportTab, setActiveSupportTab] = useState<"all" | "customer-manager" | "telemetry" | "tickets" | "credentials" | "batch" | "diagnostics">("all");
 
   // Customers / Tenants state
-  const [customersList, setCustomersList] = useState<CustomerTenant[]>(MOCK_CUSTOMERS);
+  const [customersList, setCustomersList] = useState<CustomerTenant[]>([]);
+
+  useEffect(() => {
+    console.log("[Firestore Sync] Setting up real-time listener for tenants...");
+    const unsub = onSnapshot(collection(db, "tenants"), async (snapshot) => {
+      if (snapshot.empty) {
+        console.log("[Firestore Sync] Tenants collection is empty. Seeding defaults...");
+        try {
+          for (const c of MOCK_CUSTOMERS) {
+            await setDoc(doc(db, "tenants", c.id), c);
+          }
+        } catch (err) {
+          console.error("Failed to seed tenants:", err);
+          handleFirestoreError(err, OperationType.WRITE, "tenants");
+        }
+      } else {
+        const loaded: CustomerTenant[] = [];
+        snapshot.forEach((docSnap) => {
+          loaded.push(docSnap.data() as CustomerTenant);
+        });
+        setCustomersList(loaded);
+        console.log(`[Firestore Sync] Synced ${loaded.length} tenants from Firestore.`);
+      }
+    }, (error) => {
+      console.error("[Firestore Sync] Tenants subscription error:", error);
+      handleFirestoreError(error, OperationType.GET, "tenants");
+    });
+    return () => unsub();
+  }, []);
 
   // Customer Manager state variables
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("Tenant_ID_104");
@@ -438,6 +466,160 @@ export default function SupportDashboard({
   const [simPermanentPassword, setSimPermanentPassword] = useState<string>("");
   const [simConfirmPassword, setSimConfirmPassword] = useState<string>("");
 
+  // Real AWS SES & SMTP Integration States
+  const [awsAccessKeyId, setAwsAccessKeyId] = useState<string>("");
+  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState<string>("");
+  const [awsRegion, setAwsRegion] = useState<string>("us-east-1");
+  const [awsSesSender, setAwsSesSender] = useState<string>("sender@yourdomain.com");
+  const [smtpHost, setSmtpHost] = useState<string>("email-smtp.us-east-1.amazonaws.com");
+  const [smtpPort, setSmtpPort] = useState<string>("587");
+  const [smtpUser, setSmtpUser] = useState<string>("");
+  const [smtpPass, setSmtpPass] = useState<string>("");
+  const [selectedEmailMode, setSelectedEmailMode] = useState<'sandbox' | 'sdk' | 'smtp'>('sandbox');
+  const [awsEnvStatus, setAwsEnvStatus] = useState<any>(null);
+  const [isAwsEnvStatusChecked, setIsAwsEnvStatusChecked] = useState<boolean>(false);
+
+  // Fetch AWS SES environmental status from our backend
+  const fetchAwsSesStatus = async () => {
+    try {
+      const res = await fetch("/api/aws-ses/status");
+      if (res.ok) {
+        const data = await res.json();
+        setAwsEnvStatus(data.env);
+        setIsAwsEnvStatusChecked(true);
+        if (data.env.awsSesSender) {
+          setAwsSesSender(data.env.awsSesSender);
+        }
+        if (data.env.smtpServer) {
+          setSmtpHost(data.env.smtpServer);
+        }
+        if (data.env.smtpPort) {
+          setSmtpPort(data.env.smtpPort);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch AWS SES status:", err);
+    }
+  };
+
+  const saveUserInvitationToFirestore = async (email: string, tenantId: string, role: string, status: 'invited' | 'active') => {
+    try {
+      console.log(`[Firestore] Saving user invitation: ${email}, tenant: ${tenantId}, status: ${status}`);
+      const usersRef = collection(db, "users");
+      const q = query(usersRef, where("email", "==", email));
+      const querySnapshot = await getDocs(q);
+
+      if (!querySnapshot.empty) {
+        const docRef = querySnapshot.docs[0].ref;
+        await setDoc(docRef, {
+          email,
+          tenant_id: tenantId,
+          role,
+          enrollment_status: status,
+          created_at: new Date().toISOString()
+        });
+        console.log(`[Firestore] Overwritten/Updated user invitation for ${email} with docId: ${docRef.id}`);
+      } else {
+        const docRef = doc(usersRef);
+        await setDoc(docRef, {
+          email,
+          tenant_id: tenantId,
+          role,
+          enrollment_status: status,
+          created_at: new Date().toISOString()
+        });
+        console.log(`[Firestore] Created new user invitation for ${email} with docId: ${docRef.id}`);
+      }
+    } catch (err: any) {
+      console.error("Firestore Save Error:", err);
+      handleFirestoreError(err, OperationType.WRITE, "users");
+    }
+  };
+
+  const handleDispatchEmail = async () => {
+    setSimulatedEmailStatus('sending');
+    setEmailLogs([`[System] Starting dispatch workflow in '${selectedEmailMode.toUpperCase()}' mode...`]);
+
+    if (selectedEmailMode === 'sandbox') {
+      setEmailLogs(prev => [...prev, "[SMTP] Opening secure TLS connection with dispatch-sandbox.sparkanalytic.com:587..."]);
+      
+      setTimeout(() => {
+        setEmailLogs(prev => [...prev, "[SMTP] Handshake completed successfully. Authenticating via token..."]);
+      }, 500);
+
+      setTimeout(() => {
+        setEmailLogs(prev => [...prev, `[SMTP] Sender authorized. Queueing outbound invite to: ${custEmail}...`]);
+      }, 1000);
+
+      setTimeout(() => {
+        setEmailLogs(prev => [...prev, "[SMTP] Dispatch complete. Remote server accepted packet. Code: 250 OK"]);
+        setSimulatedEmailStatus('sent');
+        setToast({ message: `Simulated invitation successfully dispatched to ${custEmail}!`, type: "success" });
+        // Save user invitation to firestore
+        saveUserInvitationToFirestore(custEmail, selectedCustomerId || custTenantId, "tenant_admin", "invited");
+      }, 1500);
+    } else {
+      try {
+        const bodyText = `Hello Client Management at ${custCompanyName},\n\nYour SPARK Analytics customer account is ready. Please proceed to activate your portal:\n\n👉 Link: https://${custSubdomain || "company"}.sparkanalytic.com/activate?token=${custActivationToken}\n👉 Temp Password: ${custTempPassword || "N/A"}\n\nOnce logged in, you can configure your sub-domain preferences, activate the Customer Portal, and assign the Rep Interface to your employees.\n\nBest regards,\nSPARK System Provisioning Team`;
+
+        const requestBody: any = {
+          method: selectedEmailMode,
+          to: custEmail,
+          from: awsSesSender,
+          subject: `Welcome to SPARK Analytics - Activate Your Managed Portals`,
+          body: bodyText,
+        };
+
+        if (selectedEmailMode === 'sdk') {
+          requestBody.customAwsConfig = {
+            accessKeyId: awsAccessKeyId || undefined,
+            secretAccessKey: awsSecretAccessKey || undefined,
+            region: awsRegion,
+          };
+        } else {
+          requestBody.customSmtpConfig = {
+            host: smtpHost,
+            port: smtpPort,
+            user: smtpUser || undefined,
+            pass: smtpPass || undefined,
+          };
+        }
+
+        const res = await fetch("/api/aws-ses/send", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        const data = await res.json();
+        if (data.logs) {
+          setEmailLogs(data.logs);
+        }
+
+        if (res.ok && data.success) {
+          setSimulatedEmailStatus('sent');
+          setToast({ message: `Live AWS SES email successfully dispatched to ${custEmail}!`, type: "success" });
+          fetchAwsSesStatus(); // refresh status
+          // Save user invitation to firestore
+          saveUserInvitationToFirestore(custEmail, selectedCustomerId || custTenantId, "tenant_admin", "invited");
+        } else {
+          setSimulatedEmailStatus('idle');
+          setToast({ message: data.error || "Failed to send live AWS SES email.", type: "error" });
+        }
+      } catch (err: any) {
+        setSimulatedEmailStatus('idle');
+        setEmailLogs(prev => [...prev, `[System Error] Network or server error: ${err.message || err}`]);
+        setToast({ message: `Failed to connect to email API.`, type: "error" });
+      }
+    }
+  };
+
+  useEffect(() => {
+    fetchAwsSesStatus();
+  }, []);
+
   // Sync state with selected customer details
   useEffect(() => {
     const customer = customersList.find(c => c.id === selectedCustomerId);
@@ -452,7 +634,7 @@ export default function SupportDashboard({
       setCustCity(customer.city);
       setCustState(customer.state);
       setCustZipCode(customer.zipCode);
-      setCustSubdomain(customer.subdomain || customer.companyName.toLowerCase().replace(/[^a-z0-9]/g, ""));
+      setCustSubdomain(customer.subdomain || (customer.companyName || "").toLowerCase().replace(/[^a-z0-9]/g, ""));
       setCustCustPortalAssigned(customer.customerPortalAssigned !== false);
       setCustPerfPortalAssigned(customer.performancePortalAssigned !== false);
       setCustActivationToken(customer.activationToken || "");
@@ -538,6 +720,61 @@ export default function SupportDashboard({
 
     if (!authEmail.trim() || !authPassword.trim()) {
       setAuthError("Email and Password are required.");
+      setAuthLoading(false);
+      return;
+    }
+
+    const isMasterAdmin = authEmail.trim().toLowerCase() === "tom@sparkanalytic.com" && authPassword === "BoatBuilder2026!";
+
+    if (isMasterAdmin) {
+      const masterUser = {
+        uid: "master-admin-uid-tom-hansen",
+        name: "Tom Hansen",
+        displayName: "Tom Hansen",
+        email: "tom@sparkanalytic.com",
+        tenant_id: "tenant-master-admin",
+        role: "tenant_admin",
+        companyName: "Spark Master Admin Workspace",
+      };
+
+      // Try seeding Firestore
+      try {
+        await setDoc(doc(db, "users", "master-admin-uid-tom-hansen"), {
+          email: "tom@sparkanalytic.com",
+          name: "Tom Hansen",
+          tenant_id: "tenant-master-admin",
+          role: "tenant_admin",
+          enrollment_status: "active",
+          created_at: new Date().toISOString()
+        });
+        await setDoc(doc(db, "tenants", "tenant-master-admin"), {
+          id: "tenant-master-admin",
+          name: "Spark Master Admin Workspace",
+          created_at: new Date().toISOString()
+        });
+      } catch (fsErr) {
+        console.warn("Firestore seeding failed:", fsErr);
+      }
+
+      // Best-effort auth
+      try {
+        await createUserWithEmailAndPassword(auth, "tom@sparkanalytic.com", "BoatBuilder2026!");
+        if (auth.currentUser) {
+          await updateProfile(auth.currentUser, { displayName: "Tom Hansen" });
+        }
+      } catch (authErr: any) {
+        if (authErr.code === "auth/email-already-in-use") {
+          try {
+            await signInWithEmailAndPassword(auth, "tom@sparkanalytic.com", "BoatBuilder2026!");
+          } catch (signInErr) {
+            console.warn("Firebase sign in failed:", signInErr);
+          }
+        }
+      }
+
+      localStorage.removeItem("spark_support_local_user");
+      localStorage.setItem("spark_sandbox_user", JSON.stringify(masterUser));
+      setAuthUser(masterUser);
       setAuthLoading(false);
       return;
     }
@@ -704,11 +941,72 @@ export default function SupportDashboard({
     return { brand, bankName, iconColor };
   };
 
-  // State arrays initialized from mock data
-  const [alerts, setAlerts] = useState<TelemetryAlert[]>(MOCK_ALERTS);
+  // State arrays initialized from mock data / Firestore sync
+  const [alerts, setAlerts] = useState<TelemetryAlert[]>([]);
   const [localTickets, setLocalTickets] = useState<SupportTicket[]>(MOCK_TICKETS);
   const tickets = propsTickets || localTickets;
   const setTickets = propsSetTickets || setLocalTickets;
+  const [localTranscripts, setLocalTranscripts] = useState<TranscriptRecord[]>([]);
+  const [deletedTranscriptIds, setDeletedTranscriptIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    console.log("[Firestore Sync] Setting up real-time listener for telemetry alerts...");
+    const unsub = onSnapshot(collection(db, "alerts"), async (snapshot) => {
+      if (snapshot.empty) {
+        console.log("[Firestore Sync] Alerts collection is empty. Seeding defaults...");
+        try {
+          for (const a of MOCK_ALERTS) {
+            await setDoc(doc(db, "alerts", a.id), a);
+          }
+        } catch (err) {
+          console.error("Failed to seed alerts:", err);
+          handleFirestoreError(err, OperationType.WRITE, "alerts");
+        }
+      } else {
+        const loaded: TelemetryAlert[] = [];
+        snapshot.forEach((docSnap) => {
+          loaded.push(docSnap.data() as TelemetryAlert);
+        });
+        // Sort alerts by timestamp descending
+        loaded.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setAlerts(loaded);
+        console.log(`[Firestore Sync] Synced ${loaded.length} alerts from Firestore.`);
+      }
+    }, (error) => {
+      console.error("[Firestore Sync] Alerts subscription error:", error);
+      handleFirestoreError(error, OperationType.GET, "alerts");
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    console.log("[Firestore Sync] Setting up real-time listener for transcripts...");
+    const unsub = onSnapshot(collection(db, "transcripts"), async (snapshot) => {
+      if (snapshot.empty) {
+        console.log("[Firestore Sync] Transcripts collection is empty. Seeding defaults...");
+        try {
+          for (const t of MOCK_TRANSCRIPTS) {
+            await setDoc(doc(db, "transcripts", t.id), t);
+          }
+        } catch (err) {
+          console.error("Failed to seed transcripts:", err);
+          handleFirestoreError(err, OperationType.WRITE, "transcripts");
+        }
+      } else {
+        const loaded: TranscriptRecord[] = [];
+        snapshot.forEach((docSnap) => {
+          loaded.push(docSnap.data() as TranscriptRecord);
+        });
+        setLocalTranscripts(loaded);
+        console.log(`[Firestore Sync] Synced ${loaded.length} transcripts from Firestore.`);
+      }
+    }, (error) => {
+      console.error("[Firestore Sync] Transcripts subscription error:", error);
+      handleFirestoreError(error, OperationType.GET, "transcripts");
+    });
+    return () => unsub();
+  }, []);
+
   // Combine mock transcripts with active database sessions dynamically in the compliance console
   const transcripts = React.useMemo<TranscriptRecord[]>(() => {
     const mapped: TranscriptRecord[] = (sessions || []).map(s => ({
@@ -717,19 +1015,19 @@ export default function SupportDashboard({
       customerName: s.customerName || "Unknown Customer",
       userName: s.repName || "Unknown Rep",
       date: s.date || "Unknown Date",
-      fileName: s.analysisNumber ? `call_analysis_${s.analysisNumber}.json` : `${s.title.toLowerCase().replace(/\s+/g, "_")}.json`,
+      fileName: s.analysisNumber ? `call_analysis_${s.analysisNumber}.json` : `${(s.title || "").toLowerCase().replace(/\s+/g, "_")}.json`,
       duration: "10m 00s",
       fullText: s.transcriptText || ""
     }));
 
-    const combined = [...MOCK_TRANSCRIPTS];
+    const combined = [...localTranscripts];
     mapped.forEach(ms => {
       if (!combined.some(t => t.id === ms.id)) {
         combined.push(ms);
       }
     });
-    return combined;
-  }, [sessions]);
+    return combined.filter(t => !deletedTranscriptIds.includes(t.id));
+  }, [sessions, localTranscripts, deletedTranscriptIds]);
 
   // Custom non-blocking dialogs and notifications
   const [dashboardConfirm, setDashboardConfirm] = useState<{
@@ -830,6 +1128,126 @@ export default function SupportDashboard({
     }, 600);
   };
 
+  // Generate simulated telemetry alerts in real time
+  const handleGenerateSimulatedAlert = (isAuto: boolean = false) => {
+    const targetTenant = selectedTenant === "ALL_TENANTS" 
+      ? (customersList[Math.floor(Math.random() * customersList.length)]?.id || "Tenant_ID_101")
+      : selectedTenant;
+      
+    const serviceComponents = [
+      "InboundSync-Lambda",
+      "SalesforceConnector-Lambda",
+      "HubSpotSync-Service",
+      "SecurityAudit-Guard",
+      "ComplianceValidator-Stream",
+      "PersuasionModel-Inference",
+      "ArachnidGuard-Webhook"
+    ];
+    
+    const errors = [
+      { code: "504 Gateway Timeout", msg: "Cognito session verification timed out; automatic retry scheduled." },
+      { code: "403 Forbidden", msg: "Invalid HMAC signature signature headers on incoming payload chunk." },
+      { code: "429 Too Many Requests", msg: "Daily batch synchronization throughput quota exceeded on destination." },
+      { code: "500 Internal Error", msg: "Post-compliance check hook returned non-zero exit code during dialogue model persuasion sweep." },
+      { code: "400 Bad Request", msg: "Malformed metadata JSON format; body validation bypassed due to strict sandbox safety." }
+    ];
+    
+    const randomComp = serviceComponents[Math.floor(Math.random() * serviceComponents.length)];
+    const randomErr = errors[Math.floor(Math.random() * errors.length)];
+    
+    const newAlert: TelemetryAlert = {
+      id: `alert-sim-${Math.random().toString(36).substring(2, 9)}`,
+      timestamp: new Date().toISOString(),
+      tenantId: targetTenant,
+      serviceComponent: randomComp,
+      awsErrorCode: randomErr.code,
+      diagnosticMessage: randomErr.msg,
+      severity: Math.random() > 0.4 ? "critical" : "warning"
+    };
+    
+    setDoc(doc(db, "alerts", newAlert.id), newAlert).catch(err => {
+      console.error("Failed to save alert to Firestore:", err);
+    });
+    
+    if (!isAuto) {
+      setToast({
+        message: `Simulated live telemetry incident generated for ${targetTenant}!`,
+        type: "success"
+      });
+    }
+  };
+
+  const handleDeleteTranscript = (id: string, fileName: string) => {
+    setDashboardConfirm({
+      title: "Delete Batch Transcript",
+      message: `Are you sure you want to permanently delete the batch transcript file "${fileName}" from Firestore?`,
+      onConfirm: async () => {
+        try {
+          // 1. Delete from transcripts collection
+          await deleteDoc(doc(db, "transcripts", id));
+          
+          // 2. Also delete from sessions collections if it exists there
+          const session = (sessions || []).find(s => s.id === id);
+          if (session) {
+            await deleteDoc(doc(db, "sessions", id));
+            if (session.tenantId) {
+              await deleteDoc(doc(db, "tenants", session.tenantId, "sessions", id));
+            }
+          }
+
+          if (selectedBatchTranscriptId === id) {
+            setSelectedBatchTranscriptId(null);
+          }
+          setToast({ message: `Successfully deleted batch transcript "${fileName}" from Firestore.`, type: "success" });
+        } catch (err) {
+          console.error("Failed to delete transcript:", err);
+          setToast({ message: "Failed to delete transcript from Firestore.", type: "error" });
+        }
+      }
+    });
+  };
+
+  const handleDeleteAllBatches = () => {
+    setDashboardConfirm({
+      title: "Delete All Batches & Transcripts",
+      message: "Are you sure you want to permanently delete all batch transcript files and dynamic call sessions across all tenants from Firestore?",
+      onConfirm: async () => {
+        try {
+          // 1. Clear all transcripts
+          const q = await getDocs(collection(db, "transcripts"));
+          for (const docSnap of q.docs) {
+            await deleteDoc(docSnap.ref);
+          }
+
+          // 2. Clear all dynamic call sessions
+          if (sessions && sessions.length > 0) {
+            for (const s of sessions) {
+              await deleteDoc(doc(db, "sessions", s.id));
+              if (s.tenantId) {
+                await deleteDoc(doc(db, "tenants", s.tenantId, "sessions", s.id));
+              }
+            }
+          }
+
+          setSelectedBatchTranscriptId(null);
+          setToast({ message: "All batch transcript records and call sessions successfully cleared from Firestore.", type: "success" });
+        } catch (err) {
+          console.error("Failed to delete all transcripts:", err);
+          setToast({ message: "Failed to delete all transcripts from Firestore.", type: "error" });
+        }
+      }
+    });
+  };
+
+  // Set up periodic simulated background telemetry activity
+  useEffect(() => {
+    const timer = setInterval(() => {
+      // Simulate real-time stream activity background additions occasionally
+      handleGenerateSimulatedAlert(true);
+    }, 45000); // every 45 seconds
+    return () => clearInterval(timer);
+  }, [selectedTenant, customersList]);
+
   // Filter alerts based on Selected Tenant
   const filteredAlerts = alerts.filter(alert => {
     if (selectedTenant !== "ALL_TENANTS") {
@@ -856,12 +1274,12 @@ export default function SupportDashboard({
       // 3. Search Query Filter
       if (ticketSearchQuery.trim()) {
         const query = ticketSearchQuery.toLowerCase();
-        const matchesId = ticket.id.toLowerCase().includes(query);
-        const matchesTitle = ticket.title.toLowerCase().includes(query);
-        const matchesTenantName = ticket.tenantName.toLowerCase().includes(query);
-        const matchesMessage = ticket.customerMessage.toLowerCase().includes(query);
-        const matchesPriority = ticket.priority.toLowerCase().includes(query);
-        const matchesStatus = ticket.status.toLowerCase().includes(query);
+        const matchesId = (ticket.id || "").toLowerCase().includes(query);
+        const matchesTitle = (ticket.title || "").toLowerCase().includes(query);
+        const matchesTenantName = (ticket.tenantName || "").toLowerCase().includes(query);
+        const matchesMessage = (ticket.customerMessage || "").toLowerCase().includes(query);
+        const matchesPriority = (ticket.priority || "").toLowerCase().includes(query);
+        const matchesStatus = (ticket.status || "").toLowerCase().includes(query);
         
         if (!matchesId && !matchesTitle && !matchesTenantName && !matchesMessage && !matchesPriority && !matchesStatus) {
           return false;
@@ -903,8 +1321,8 @@ export default function SupportDashboard({
     // Search by User (speaker/rep/customer name)
     if (batchSearchUser.trim() !== "") {
       const uQuery = batchSearchUser.toLowerCase();
-      const inSpeaker = t.userName.toLowerCase().includes(uQuery) || 
-                        t.fullText.toLowerCase().includes(uQuery);
+      const inSpeaker = (t.userName || "").toLowerCase().includes(uQuery) || 
+                        (t.fullText || "").toLowerCase().includes(uQuery);
       if (!inSpeaker) return false;
     }
     // Search by Date
@@ -914,12 +1332,12 @@ export default function SupportDashboard({
     // Keyword lookup (searches across transcript full text, customer name, user name, file name, tenant ID, and record ID)
     if (batchSearchKeyword.trim() !== "") {
       const kw = batchSearchKeyword.toLowerCase();
-      const isMatch = t.fullText.toLowerCase().includes(kw) ||
-                      t.customerName.toLowerCase().includes(kw) ||
-                      t.userName.toLowerCase().includes(kw) ||
-                      t.fileName.toLowerCase().includes(kw) ||
-                      t.tenantId.toLowerCase().includes(kw) ||
-                      t.id.toLowerCase().includes(kw);
+      const isMatch = (t.fullText || "").toLowerCase().includes(kw) ||
+                      (t.customerName || "").toLowerCase().includes(kw) ||
+                      (t.userName || "").toLowerCase().includes(kw) ||
+                      (t.fileName || "").toLowerCase().includes(kw) ||
+                      (t.tenantId || "").toLowerCase().includes(kw) ||
+                      (t.id || "").toLowerCase().includes(kw);
       if (!isMatch) return false;
     }
     return true;
@@ -1229,7 +1647,7 @@ export default function SupportDashboard({
                   />
                 </div>
                 <div className="max-h-48 overflow-y-auto">
-                  {TENANTS.filter(t => t.name.toLowerCase().includes(searchQuery.toLowerCase()) || t.id.toLowerCase().includes(searchQuery.toLowerCase())).map((t) => (
+                  {TENANTS.filter(t => (t.name || "").toLowerCase().includes((searchQuery || "").toLowerCase()) || (t.id || "").toLowerCase().includes((searchQuery || "").toLowerCase())).map((t) => (
                     <div
                       key={t.id}
                       onClick={() => {
@@ -1803,11 +2221,21 @@ export default function SupportDashboard({
                     </h2>
                     <p className="text-xs text-slate-400">AWS CloudWatch & Lambda Event pipeline streams filtered for active lock context.</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-slate-500 font-mono">Stream status:</span>
-                    <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-[10px] font-mono font-bold animate-pulse">
-                      CONNECTED
-                    </span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={() => handleGenerateSimulatedAlert(false)}
+                      className="px-2.5 py-1 text-[10px] font-bold font-mono uppercase bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 rounded transition-all cursor-pointer flex items-center gap-1.5 shadow-sm hover:scale-[1.02] active:scale-[0.98]"
+                      title="Simulate injection of a live AWS CloudWatch / Lambda failure telemetry log into this stream"
+                    >
+                      <Sparkles className="w-3 h-3 text-rose-400 animate-pulse" />
+                      <span>Inject Live Alert</span>
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-500 font-mono">Stream:</span>
+                      <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-[10px] font-mono font-bold animate-pulse">
+                        CONNECTED
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -2077,40 +2505,73 @@ export default function SupportDashboard({
                     <p className="text-xs text-slate-400">Add, delete, update and manage isolated client tenant properties and secure profiles.</p>
                   </div>
                   
-                  {/* Action "New" Customer button */}
-                  <button
-                    onClick={() => {
-                      setIsCreatingNewCust(true);
-                      setSelectedCustomerId("");
-                      setCustCompanyName("");
-                      const numericIds = customersList
-                        .map(c => {
-                          const match = c.id.match(/Tenant_ID_(\d+)/);
-                          return match ? parseInt(match[1], 10) : 0;
-                        })
-                        .filter(num => num >= 101);
-                      const maxId = numericIds.length > 0 ? Math.max(...numericIds) : 100;
-                      setCustTenantId(`Tenant_ID_${maxId + 1}`);
-                      setCustEmail("");
-                      setCustSecondEmail("");
-                      setCustPhone("");
-                      setCustAddress1("");
-                      setCustAddress2("");
-                      setCustCity("");
-                      setCustState("");
-                      setCustZipCode("");
-                      setCustSubdomain("");
-                      setCustCustPortalAssigned(true);
-                      setCustPerfPortalAssigned(true);
-                      setCustActivationToken("");
-                      setCustTempPassword("");
-                      setCustActivationStatus("Not Invited");
-                    }}
-                    className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-2 shadow-md shadow-rose-600/10 cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>New Customer</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Delete All Customers button */}
+                    {customersList.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setDashboardConfirm({
+                            title: "Delete All Customer Tenants",
+                            message: "Are you sure you want to permanently delete all customer tenant profiles from Firestore? This action cannot be undone.",
+                            onConfirm: async () => {
+                              try {
+                                const q = await getDocs(collection(db, "tenants"));
+                                for (const docSnap of q.docs) {
+                                  await deleteDoc(docSnap.ref);
+                                }
+                                setSelectedCustomerId("");
+                                setToast({ message: "All customer tenant profiles have been successfully deleted from Firestore.", type: "success" });
+                                console.log("[Customer Manager] Deleted all customer tenants from Firestore.");
+                              } catch (err: any) {
+                                console.error("Failed to delete all customer tenants:", err);
+                                setToast({ message: "Failed to delete all tenants from Firestore.", type: "error" });
+                              }
+                            }
+                          });
+                        }}
+                        className="bg-slate-900/60 hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-900/60 font-mono text-xs font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-2 shadow-md cursor-pointer"
+                        title="Delete all customer tenants in the system"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Delete All Tenants</span>
+                      </button>
+                    )}
+
+                    {/* Action "New" Customer button */}
+                    <button
+                      onClick={() => {
+                        setIsCreatingNewCust(true);
+                        setSelectedCustomerId("");
+                        setCustCompanyName("");
+                        const numericIds = customersList
+                          .map(c => {
+                            const match = c.id.match(/Tenant_ID_(\d+)/);
+                            return match ? parseInt(match[1], 10) : 0;
+                          })
+                          .filter(num => num >= 101);
+                        const maxId = numericIds.length > 0 ? Math.max(...numericIds) : 100;
+                        setCustTenantId(`Tenant_ID_${maxId + 1}`);
+                        setCustEmail("");
+                        setCustSecondEmail("");
+                        setCustPhone("");
+                        setCustAddress1("");
+                        setCustAddress2("");
+                        setCustCity("");
+                        setCustState("");
+                        setCustZipCode("");
+                        setCustSubdomain("");
+                        setCustCustPortalAssigned(true);
+                        setCustPerfPortalAssigned(true);
+                        setCustActivationToken("");
+                        setCustTempPassword("");
+                        setCustActivationStatus("Not Invited");
+                      }}
+                      className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-2 shadow-md shadow-rose-600/10 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>New Customer</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Main section: Left split column (Search and list), Right split column (Details & Form) */}
@@ -2132,8 +2593,8 @@ export default function SupportDashboard({
                     <div className="space-y-2 max-h-[480px] overflow-y-auto pr-2 scrollbar-none">
                       {customersList
                         .filter(c => 
-                          c.companyName.toLowerCase().includes(custSearch.toLowerCase()) || 
-                          c.id.toLowerCase().includes(custSearch.toLowerCase())
+                          (c.companyName || "").toLowerCase().includes((custSearch || "").toLowerCase()) || 
+                          (c.id || "").toLowerCase().includes((custSearch || "").toLowerCase())
                         )
                         .map(c => (
                           <div
@@ -2163,17 +2624,22 @@ export default function SupportDashboard({
                                 e.stopPropagation();
                                 setDashboardConfirm({
                                   title: "Delete Customer Tenant",
-                                  message: `Are you sure you want to delete customer tenant ${c.companyName}? This action is locally simulated.`,
-                                  onConfirm: () => {
-                                    const updatedList = customersList.filter(item => item.id !== c.id);
-                                    setCustomersList(updatedList);
-                                    if (selectedCustomerId === c.id && updatedList.length > 0) {
-                                      setSelectedCustomerId(updatedList[0].id);
-                                    } else if (updatedList.length === 0) {
-                                      setSelectedCustomerId("");
+                                  message: `Are you sure you want to delete customer tenant ${c.companyName} from Firestore?`,
+                                  onConfirm: async () => {
+                                    try {
+                                      await deleteDoc(doc(db, "tenants", c.id));
+                                      const updatedList = customersList.filter(item => item.id !== c.id);
+                                      if (selectedCustomerId === c.id && updatedList.length > 0) {
+                                        setSelectedCustomerId(updatedList[0].id);
+                                      } else if (updatedList.length === 0) {
+                                        setSelectedCustomerId("");
+                                      }
+                                      console.log(`[Customer Manager] Deleted customer ${c.companyName} from Firestore`);
+                                      setToast({ message: `Customer tenant ${c.companyName} deleted.`, type: "success" });
+                                    } catch (err: any) {
+                                      console.error("Failed to delete customer tenant from Firestore:", err);
+                                      setToast({ message: "Failed to delete customer tenant.", type: "error" });
                                     }
-                                    console.log(`[Customer Manager] Deleted customer ${c.companyName}`);
-                                    setToast({ message: `Customer tenant ${c.companyName} deleted.`, type: "success" });
                                   }
                                 });
                               }}
@@ -2185,8 +2651,8 @@ export default function SupportDashboard({
                           </div>
                         ))}
                       {customersList.filter(c => 
-                        c.companyName.toLowerCase().includes(custSearch.toLowerCase()) || 
-                        c.id.toLowerCase().includes(custSearch.toLowerCase())
+                        (c.companyName || "").toLowerCase().includes((custSearch || "").toLowerCase()) || 
+                        (c.id || "").toLowerCase().includes((custSearch || "").toLowerCase())
                       ).length === 0 && (
                         <div className="text-center py-8 text-slate-500 text-xs italic">
                           No customers match search.
@@ -2197,7 +2663,21 @@ export default function SupportDashboard({
 
                   {/* Right Column: Form Editor / Detail view */}
                   <div className="lg:col-span-2 bg-slate-950 rounded-xl border border-slate-800 p-5 flex flex-col justify-between space-y-4">
-                    <div className="space-y-4">
+                    {!isCreatingNewCust && !selectedCustomerId ? (
+                      <div className="flex flex-col items-center justify-center py-24 text-center space-y-4 my-auto">
+                        <div className="p-4 bg-slate-900 border border-slate-850 rounded-2xl text-slate-500 animate-pulse">
+                          <Users className="w-8 h-8 text-rose-500/80" />
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="text-sm font-bold text-slate-200">No Active Tenant Selected</h3>
+                          <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
+                            Please select a customer from the list on the left to edit their details, or click <strong className="text-rose-400">"New Customer"</strong> to register a brand new tenant profile.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="space-y-4">
                       <div className="flex justify-between items-center border-b border-slate-800 pb-3">
                         <span className="text-xs font-bold text-slate-200 font-mono">
                           {isCreatingNewCust ? "⚡ REGISTER NEW TENANT CUSTOMER" : `📝 EDIT CLIENT TENANT DETAILS`}
@@ -2429,7 +2909,7 @@ export default function SupportDashboard({
                                 </button>
                               </div>
                               <p className="text-[10px] text-slate-400 font-mono leading-relaxed pt-1.5">
-                                Customer Facing Portal (Manager Role). Allows customer leaders to evaluate transcripts, configure team profiles, and manage billing.
+                                Management Interface (Manager Role). Allows customer leaders to evaluate transcripts, configure team profiles, and manage billing.
                               </p>
                             </div>
 
@@ -2457,7 +2937,7 @@ export default function SupportDashboard({
                                 </button>
                               </div>
                               <p className="text-[10px] text-slate-400 font-mono leading-relaxed pt-1.5">
-                                Rep Performance Portal (Employee Role). Assigned by customer management to support reps to evaluate their own stats.
+                                Rep Interface (Employee Role). Assigned by customer management to support reps to evaluate their own stats.
                               </p>
                             </div>
                           </div>
@@ -2552,105 +3032,246 @@ export default function SupportDashboard({
                                   </div>
                                 </div>
 
-                                {/* Temporary Sandbox SMTP Dispatch Console */}
-                                <div className="bg-slate-950 rounded-lg border border-slate-900 p-3 space-y-3">
-                                  <div className="flex items-center justify-between border-b border-slate-900 pb-2">
-                                    <div className="flex items-center gap-1.5">
-                                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                                      <span className="text-[9px] font-bold text-slate-300 font-mono uppercase tracking-wider">
-                                        SMTP Email Dispatch Sandbox (Temporary Solution)
-                                      </span>
-                                    </div>
-                                    <span className="text-[7.5px] font-mono text-slate-500 bg-slate-900/80 border border-slate-800 px-1.5 py-0.5 rounded">
-                                      Spark Email Routing Sandbox
-                                    </span>
-                                  </div>
+                                 {/* AWS SES & SMTP Email Dispatch Console */}
+                                 <div className="bg-slate-950 rounded-lg border border-slate-900 p-4 space-y-4 shadow-inner">
+                                   <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-900 pb-2 gap-2">
+                                     <div className="flex items-center gap-1.5">
+                                       <Sparkles className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
+                                       <span className="text-[10px] font-bold text-slate-200 font-mono uppercase tracking-wider">
+                                         Enterprise Outbound Email Dispatcher
+                                       </span>
+                                     </div>
+                                     <div className="flex items-center gap-1.5">
+                                       <span className="text-[7.5px] font-mono text-cyan-400 bg-cyan-950/40 border border-cyan-800/60 px-2 py-0.5 rounded-full uppercase font-bold">
+                                         AWS SES Sandbox Integrated
+                                       </span>
+                                     </div>
+                                   </div>
 
-                                  <div className="bg-slate-900/40 p-2.5 rounded border border-slate-800/40 text-[9.5px] font-mono text-slate-400 space-y-1">
-                                    <div><span className="text-slate-500 font-bold">To:</span> {custEmail}</div>
-                                    <div><span className="text-slate-500 font-bold">Subject:</span> Welcome to SPARK Analytics - Activate Your Managed Portals</div>
-                                    <div className="text-[9px] text-slate-500 pt-1.5 leading-relaxed max-h-[100px] overflow-y-auto border-t border-slate-900 mt-1.5">
-                                      Hello Client Management at {custCompanyName},<br/><br/>
-                                      Your SPARK Analytics customer account is ready. Please proceed to activate your portal: <br/><br/>
-                                      👉 <strong>Link:</strong> https://{custSubdomain || "company"}.sparkanalytic.com/activate?token={custActivationToken}<br/>
-                                      👉 <strong>Temp Password:</strong> {custTempPassword || "N/A"}<br/><br/>
-                                      Once logged in, you can configure your sub-domain preferences, activate the Customer Portal, and assign the Rep Performance Portal to your employees.<br/><br/>
-                                      Best regards,<br/>
-                                      SPARK System Provisioning Team
-                                    </div>
-                                  </div>
+                                   {/* Dispatch Mode Selector */}
+                                   <div className="grid grid-cols-3 gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-800/80">
+                                     <button
+                                       type="button"
+                                       onClick={() => setSelectedEmailMode('sandbox')}
+                                       className={`text-[8.5px] font-mono py-1 rounded font-bold cursor-pointer transition-all ${
+                                         selectedEmailMode === 'sandbox'
+                                           ? 'bg-slate-850 text-rose-400 border border-slate-800'
+                                           : 'text-slate-500 hover:text-slate-300'
+                                       }`}
+                                     >
+                                       Mock Sandbox
+                                     </button>
+                                     <button
+                                       type="button"
+                                       onClick={() => setSelectedEmailMode('sdk')}
+                                       className={`text-[8.5px] font-mono py-1 rounded font-bold cursor-pointer transition-all ${
+                                         selectedEmailMode === 'sdk'
+                                           ? 'bg-slate-850 text-cyan-400 border border-slate-800'
+                                           : 'text-slate-500 hover:text-slate-300'
+                                       }`}
+                                     >
+                                       AWS SES SDK
+                                     </button>
+                                     <button
+                                       type="button"
+                                       onClick={() => setSelectedEmailMode('smtp')}
+                                       className={`text-[8.5px] font-mono py-1 rounded font-bold cursor-pointer transition-all ${
+                                         selectedEmailMode === 'smtp'
+                                           ? 'bg-slate-850 text-amber-400 border border-slate-800'
+                                           : 'text-slate-500 hover:text-slate-300'
+                                       }`}
+                                     >
+                                       AWS SES SMTP
+                                     </button>
+                                   </div>
 
-                                  <div className="flex flex-col sm:flex-row gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setSimulatedEmailStatus('sending');
-                                        setEmailLogs(["[SMTP] Opening secure TLS connection with dispatch-sandbox.sparkanalytic.com:587..."]);
-                                        
-                                        setTimeout(() => {
-                                          setEmailLogs(prev => [...prev, "[SMTP] Handshake completed successfully. Authenticating via token..."]);
-                                        }, 500);
+                                   {/* Dynamic Credentials Inputs based on mode selection */}
+                                   {selectedEmailMode === 'sdk' && (
+                                     <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-800/60 space-y-2.5">
+                                       <div className="flex items-center justify-between">
+                                         <span className="text-[8.5px] text-cyan-400 font-mono font-bold uppercase tracking-wider block">AWS SES SDK Settings</span>
+                                         <span className="text-[8px] font-mono text-slate-500">
+                                           {awsEnvStatus?.hasAwsAccessKeyId ? "🟢 Server Keys Loaded" : "⚪ Manual Input Mode"}
+                                         </span>
+                                       </div>
+                                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px]">
+                                         <div className="space-y-1">
+                                           <label className="text-[8px] text-slate-500 font-mono uppercase block">AWS Region</label>
+                                           <input
+                                             type="text"
+                                             value={awsRegion}
+                                             onChange={(e) => setAwsRegion(e.target.value)}
+                                             placeholder="us-east-1"
+                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-cyan-500 font-mono"
+                                           />
+                                         </div>
+                                         <div className="space-y-1">
+                                           <label className="text-[8px] text-slate-500 font-mono uppercase block">Sender Email</label>
+                                           <input
+                                             type="text"
+                                             value={awsSesSender}
+                                             onChange={(e) => setAwsSesSender(e.target.value)}
+                                             placeholder="sender@yourdomain.com"
+                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-cyan-500 font-mono"
+                                           />
+                                         </div>
+                                         <div className="space-y-1">
+                                           <label className="text-[8px] text-slate-500 font-mono uppercase block">Access Key ID</label>
+                                           <input
+                                             type="password"
+                                             value={awsAccessKeyId}
+                                             onChange={(e) => setAwsAccessKeyId(e.target.value)}
+                                             placeholder={awsEnvStatus?.hasAwsAccessKeyId ? "•••••••••••• (Using Env Var)" : "AKIA..."}
+                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-cyan-500 font-mono"
+                                           />
+                                         </div>
+                                         <div className="space-y-1">
+                                           <label className="text-[8px] text-slate-500 font-mono uppercase block">Secret Access Key</label>
+                                           <input
+                                             type="password"
+                                             value={awsSecretAccessKey}
+                                             onChange={(e) => setAwsSecretAccessKey(e.target.value)}
+                                             placeholder={awsEnvStatus?.hasAwsSecretAccessKey ? "•••••••••••• (Using Env Var)" : "AWS Secret..."}
+                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-cyan-500 font-mono"
+                                           />
+                                         </div>
+                                       </div>
+                                     </div>
+                                   )}
 
-                                        setTimeout(() => {
-                                          setEmailLogs(prev => [...prev, `[SMTP] Sender authorized. Queueing outbound invite to: ${custEmail}...`]);
-                                        }, 1000);
+                                   {selectedEmailMode === 'smtp' && (
+                                     <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-800/60 space-y-2.5">
+                                       <div className="flex items-center justify-between">
+                                         <span className="text-[8.5px] text-amber-400 font-mono font-bold uppercase tracking-wider block">AWS SES SMTP Settings</span>
+                                         <span className="text-[8px] font-mono text-slate-500">
+                                           {awsEnvStatus?.hasSmtpUsername ? "🟢 Server SMTP Loaded" : "⚪ Manual Input Mode"}
+                                         </span>
+                                       </div>
+                                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px]">
+                                         <div className="space-y-1">
+                                           <label className="text-[8px] text-slate-500 font-mono uppercase block">SMTP Host</label>
+                                           <input
+                                             type="text"
+                                             value={smtpHost}
+                                             onChange={(e) => setSmtpHost(e.target.value)}
+                                             placeholder="email-smtp.us-east-1.amazonaws.com"
+                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-amber-500 font-mono"
+                                           />
+                                         </div>
+                                         <div className="space-y-1">
+                                           <label className="text-[8px] text-slate-500 font-mono uppercase block">SMTP Port</label>
+                                           <input
+                                             type="text"
+                                             value={smtpPort}
+                                             onChange={(e) => setSmtpPort(e.target.value)}
+                                             placeholder="587"
+                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-amber-500 font-mono"
+                                           />
+                                         </div>
+                                         <div className="space-y-1">
+                                           <label className="text-[8px] text-slate-500 font-mono uppercase block">SMTP Username</label>
+                                           <input
+                                             type="password"
+                                             value={smtpUser}
+                                             onChange={(e) => setSmtpUser(e.target.value)}
+                                             placeholder={awsEnvStatus?.hasSmtpUsername ? "•••••••••••• (Using Env Var)" : "SMTP Username..."}
+                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-amber-500 font-mono"
+                                           />
+                                         </div>
+                                         <div className="space-y-1">
+                                           <label className="text-[8px] text-slate-500 font-mono uppercase block">SMTP Password</label>
+                                           <input
+                                             type="password"
+                                             value={smtpPass}
+                                             onChange={(e) => setSmtpPass(e.target.value)}
+                                             placeholder={awsEnvStatus?.hasSmtpPassword ? "•••••••••••• (Using Env Var)" : "SMTP Password..."}
+                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-amber-500 font-mono"
+                                           />
+                                         </div>
+                                         <div className="space-y-1 sm:col-span-2">
+                                           <label className="text-[8px] text-slate-500 font-mono uppercase block">Sender Email Address</label>
+                                           <input
+                                             type="text"
+                                             value={awsSesSender}
+                                             onChange={(e) => setAwsSesSender(e.target.value)}
+                                             placeholder="sender@yourdomain.com"
+                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-amber-500 font-mono"
+                                           />
+                                         </div>
+                                       </div>
+                                     </div>
+                                   )}
 
-                                        setTimeout(() => {
-                                          setEmailLogs(prev => [...prev, "[SMTP] Dispatch complete. Remote server accepted packet. Code: 250 OK"]);
-                                          setSimulatedEmailStatus('sent');
-                                          setToast({ message: `Simulated invitation successfully dispatched to ${custEmail}!`, type: "success" });
-                                        }, 1500);
-                                      }}
-                                      disabled={simulatedEmailStatus === 'sending'}
-                                      className="flex-1 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 font-mono text-[9px] py-1.5 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                                    >
-                                      {simulatedEmailStatus === 'sending' ? (
-                                        <>
-                                          <RefreshCw className="w-3 animate-spin text-rose-500" />
-                                          <span>Sending Invite Sandbox...</span>
-                                        </>
-                                      ) : simulatedEmailStatus === 'sent' ? (
-                                        <>
-                                          <CheckCircle2 className="w-3 text-emerald-400" />
-                                          <span>Sent! Trigger Dispatch Again</span>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <Send className="w-3 text-rose-400" />
-                                          <span>Dispatch Sandbox Email Invite</span>
-                                        </>
-                                      )}
-                                    </button>
+                                   {/* Email Content Preview */}
+                                   <div className="bg-slate-900/40 p-2.5 rounded border border-slate-800/40 text-[9.5px] font-mono text-slate-400 space-y-1">
+                                     <div><span className="text-slate-500 font-bold">To:</span> {custEmail}</div>
+                                     <div><span className="text-slate-500 font-bold">From:</span> {awsSesSender}</div>
+                                     <div><span className="text-slate-500 font-bold">Subject:</span> Welcome to SPARK Analytics - Activate Your Managed Portals</div>
+                                     <div className="text-[9px] text-slate-500 pt-1.5 leading-relaxed max-h-[100px] overflow-y-auto border-t border-slate-900 mt-1.5 font-sans leading-normal">
+                                       Hello Client Management at {custCompanyName},<br/><br/>
+                                       Your SPARK Analytics customer account is ready. Please proceed to activate your portal: <br/><br/>
+                                       👉 <strong>Link:</strong> https://{custSubdomain || "company"}.sparkanalytic.com/activate?token={custActivationToken}<br/>
+                                       👉 <strong>Temp Password:</strong> {custTempPassword || "N/A"}<br/><br/>
+                                       Once logged in, you can configure your sub-domain preferences, activate the Customer Portal, and assign the Rep Interface to your employees.<br/><br/>
+                                       Best regards,<br/>
+                                       SPARK System Provisioning Team
+                                     </div>
+                                   </div>
 
-                                    {!isCreatingNewCust && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setSimPermanentPassword("");
-                                          setSimConfirmPassword("");
-                                          setIsActivationSimulatorOpen(true);
-                                        }}
-                                        className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-mono text-[9px] font-bold py-1.5 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                                      >
-                                        <ExternalLink className="w-3 text-white" />
-                                        <span>Simulate Customer Activation</span>
-                                      </button>
-                                    )}
-                                  </div>
+                                   <div className="flex flex-col sm:flex-row gap-2">
+                                     <button
+                                       type="button"
+                                       onClick={handleDispatchEmail}
+                                       disabled={simulatedEmailStatus === 'sending'}
+                                       className="flex-1 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 font-mono text-[9px] py-1.5 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                     >
+                                       {simulatedEmailStatus === 'sending' ? (
+                                         <>
+                                           <RefreshCw className="w-3 animate-spin text-rose-500" />
+                                           <span>Dispatching Email...</span>
+                                         </>
+                                       ) : simulatedEmailStatus === 'sent' ? (
+                                         <>
+                                           <CheckCircle2 className="w-3 text-emerald-400" />
+                                           <span>Sent Successfully! Send Again</span>
+                                         </>
+                                       ) : (
+                                         <>
+                                           <Send className="w-3 text-rose-400" />
+                                           <span>Dispatch Email Invitation</span>
+                                         </>
+                                       )}
+                                     </button>
 
-                                  {/* SMTP Dispatch Live Logs */}
-                                  {emailLogs.length > 0 && (
-                                    <div className="bg-slate-950 p-2 rounded border border-slate-900 font-mono text-[8px] text-slate-500 space-y-0.5 leading-normal max-h-[80px] overflow-y-auto">
-                                      <div className="text-[7.5px] font-bold text-rose-400 uppercase tracking-wider border-b border-slate-900/60 pb-0.5 mb-1 flex justify-between">
-                                        <span>SMTP Relay Live Logs</span>
-                                        <span onClick={() => setEmailLogs([])} className="cursor-pointer hover:text-rose-300">Clear</span>
-                                      </div>
-                                      {emailLogs.map((log, index) => (
-                                        <div key={index} className="truncate">{log}</div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
+                                     {!isCreatingNewCust && (
+                                       <button
+                                         type="button"
+                                         onClick={() => {
+                                           setSimPermanentPassword("");
+                                           setSimConfirmPassword("");
+                                           setIsActivationSimulatorOpen(true);
+                                         }}
+                                         className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-mono text-[9px] font-bold py-1.5 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                       >
+                                         <ExternalLink className="w-3 text-white" />
+                                         <span>Simulate Customer Activation</span>
+                                       </button>
+                                     )}
+                                   </div>
+
+                                   {/* SMTP Dispatch Live Logs */}
+                                   {emailLogs.length > 0 && (
+                                     <div className="bg-slate-950 p-2 rounded border border-slate-900/60 font-mono text-[8px] text-slate-400 space-y-0.5 leading-normal max-h-[100px] overflow-y-auto">
+                                       <div className="text-[7.5px] font-bold text-rose-400 uppercase tracking-wider border-b border-slate-900/60 pb-0.5 mb-1 flex justify-between">
+                                         <span>Enterprise Relay Live Logs</span>
+                                         <span onClick={() => setEmailLogs([])} className="cursor-pointer hover:text-rose-300 font-mono">Clear</span>
+                                       </div>
+                                       {emailLogs.map((log, index) => (
+                                         <div key={index} className="truncate">{log}</div>
+                                       ))}
+                                     </div>
+                                   )}
+                                 </div>
 
                                 {/* Reset button */}
                                 <div className="flex justify-end pt-1">
@@ -2795,7 +3416,7 @@ export default function SupportDashboard({
                               <CreditCard className="w-6 h-6 text-slate-600 mx-auto" />
                               <p className="text-xs text-slate-400 font-mono">No active card details registered.</p>
                               <p className="text-[10px] text-slate-500 leading-normal max-w-md mx-auto">
-                                Instruct customer to log into the Customer Facing Portal, enter billing information, and click Save to synchronize credentials here.
+                                Instruct customer to log into the Management Interface, enter billing information, and click Save to synchronize credentials here.
                               </p>
                             </div>
                           )}
@@ -2820,7 +3441,7 @@ export default function SupportDashboard({
                             Cancel
                           </button>
                           <button
-                            onClick={() => {
+                            onClick={async () => {
                               if (!custCompanyName.trim()) {
                                 setToast({ message: "Company Name is required.", type: "error" });
                                 return;
@@ -2833,6 +3454,54 @@ export default function SupportDashboard({
                                 setToast({ message: "A customer with this Tenant ID already exists.", type: "error" });
                                 return;
                               }
+
+                              const isEmailEntered = custEmail && custEmail.trim().includes("@") && custEmail.trim().includes(".");
+                              
+                              let finalToken = custActivationToken;
+                              let finalTempPass = custTempPassword;
+                              let finalStatus = custActivationStatus;
+
+                              if (isEmailEntered) {
+                                if (!finalToken || !finalTempPass) {
+                                  finalTempPass = `SPARK-temp-${Math.floor(1000 + Math.random() * 9000)}`;
+                                  finalToken = `tok-${Math.floor(100000 + Math.random() * 900000)}`;
+                                  finalStatus = "Invited";
+                                  setCustTempPassword(finalTempPass);
+                                  setCustActivationToken(finalToken);
+                                  setCustActivationStatus("Invited");
+                                }
+
+                                setToast({ message: `Registering customer and dispatching enrollment email to ${custEmail.trim()}...`, type: "success" });
+
+                                try {
+                                  const response = await fetch("/api/aws-ses/invite", {
+                                    method: "POST",
+                                    headers: {
+                                      "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify({
+                                      email: custEmail.trim(),
+                                      tenantId: custTenantId.trim(),
+                                      role: "tenant_admin",
+                                      origin: window.location.origin,
+                                      temporaryPassword: finalTempPass,
+                                      enrollmentToken: finalToken,
+                                    }),
+                                  });
+
+                                  const data = await response.json();
+                                  if (response.ok && data.success) {
+                                    setToast({ message: `Customer saved and enrollment invitation successfully sent to ${custEmail.trim()}!`, type: "success" });
+                                  } else {
+                                    console.warn("Failed to dispatch real enrollment email:", data.error);
+                                    setToast({ message: `Customer saved, but failed to send enrollment email: ${data.error || 'SES error'}`, type: "error" });
+                                  }
+                                } catch (err: any) {
+                                  console.error("Failed to connect to enrollment API:", err);
+                                  setToast({ message: "Customer saved locally, but failed to dispatch enrollment email due to network error.", type: "error" });
+                                }
+                              }
+
                               const newCustomer: CustomerTenant = {
                                 id: custTenantId,
                                 companyName: custCompanyName,
@@ -2844,17 +3513,22 @@ export default function SupportDashboard({
                                 city: custCity,
                                 state: custState,
                                 zipCode: custZipCode,
-                                subdomain: custSubdomain || custCompanyName.toLowerCase().replace(/[^a-z0-9]/g, ""),
+                                subdomain: custSubdomain || (custCompanyName || "").toLowerCase().replace(/[^a-z0-9]/g, ""),
                                 customerPortalAssigned: custCustPortalAssigned,
                                 performancePortalAssigned: custPerfPortalAssigned,
-                                activationToken: custActivationToken,
-                                tempPassword: custTempPassword,
-                                activationStatus: custActivationStatus
+                                activationToken: finalToken,
+                                tempPassword: finalTempPass,
+                                activationStatus: finalStatus
                               };
-                              setCustomersList([...customersList, newCustomer]);
-                              setSelectedCustomerId(custTenantId);
-                              setIsCreatingNewCust(false);
-                              console.log("[Customer Manager] Registered and saved new customer:", newCustomer);
+                              try {
+                                await setDoc(doc(db, "tenants", custTenantId), newCustomer);
+                                setSelectedCustomerId(custTenantId);
+                                setIsCreatingNewCust(false);
+                                console.log("[Customer Manager] Registered and saved new customer to Firestore:", newCustomer);
+                              } catch (err: any) {
+                                console.error("Failed to register customer to Firestore:", err);
+                                setToast({ message: "Failed to save new customer profile to Firestore.", type: "error" });
+                              }
                             }}
                             className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-[10px] font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-600/10"
                           >
@@ -2869,17 +3543,22 @@ export default function SupportDashboard({
                             onClick={() => {
                               setDashboardConfirm({
                                 title: "Delete Customer Profile",
-                                message: `Are you sure you want to delete customer profile ${custCompanyName}?`,
-                                onConfirm: () => {
-                                  const updatedList = customersList.filter(item => item.id !== selectedCustomerId);
-                                  setCustomersList(updatedList);
-                                  if (updatedList.length > 0) {
-                                    setSelectedCustomerId(updatedList[0].id);
-                                  } else {
-                                    setSelectedCustomerId("");
+                                message: `Are you sure you want to delete customer profile ${custCompanyName} from Firestore?`,
+                                onConfirm: async () => {
+                                  try {
+                                    await deleteDoc(doc(db, "tenants", selectedCustomerId));
+                                    const updatedList = customersList.filter(item => item.id !== selectedCustomerId);
+                                    if (updatedList.length > 0) {
+                                      setSelectedCustomerId(updatedList[0].id);
+                                    } else {
+                                      setSelectedCustomerId("");
+                                    }
+                                    console.log(`[Customer Manager] Deleted customer ${custCompanyName} from Firestore`);
+                                    setToast({ message: `Customer profile ${custCompanyName} deleted.`, type: "success" });
+                                  } catch (err: any) {
+                                    console.error("Failed to delete customer profile:", err);
+                                    setToast({ message: "Failed to delete customer profile from Firestore.", type: "error" });
                                   }
-                                  console.log(`[Customer Manager] Deleted customer ${custCompanyName}`);
-                                  setToast({ message: `Customer profile ${custCompanyName} deleted.`, type: "success" });
                                 }
                               });
                             }}
@@ -2888,84 +3567,92 @@ export default function SupportDashboard({
                             <Trash2 className="w-3.5 h-3.5" />
                             <span>Delete</span>
                           </button>
-
+ 
                           {/* Save Profile button */}
                           <button
-                            onClick={() => {
+                            onClick={async () => {
                               if (!custCompanyName.trim()) {
                                 setToast({ message: "Company Name is required.", type: "error" });
                                 return;
                               }
-                              // Update
-                              setCustomersList(prev => prev.map(c => {
-                                if (c.id === selectedCustomerId) {
-                                  return {
-                                    ...c,
-                                    companyName: custCompanyName,
-                                    id: custTenantId,
-                                    address1: custAddress1,
-                                    address2: custAddress2,
-                                    email: custEmail,
-                                    secondEmail: custSecondEmail,
-                                    phone: custPhone,
-                                    city: custCity,
-                                    state: custState,
-                                    zipCode: custZipCode,
-                                    subdomain: custSubdomain,
-                                    customerPortalAssigned: custCustPortalAssigned,
-                                    performancePortalAssigned: custPerfPortalAssigned,
-                                    activationToken: custActivationToken,
-                                    tempPassword: custTempPassword,
-                                    activationStatus: custActivationStatus
-                                  };
+                              const updatedCustomer: CustomerTenant = {
+                                id: custTenantId,
+                                companyName: custCompanyName,
+                                address1: custAddress1,
+                                address2: custAddress2,
+                                email: custEmail,
+                                secondEmail: custSecondEmail,
+                                phone: custPhone,
+                                city: custCity,
+                                state: custState,
+                                zipCode: custZipCode,
+                                subdomain: custSubdomain,
+                                customerPortalAssigned: custCustPortalAssigned,
+                                performancePortalAssigned: custPerfPortalAssigned,
+                                activationToken: custActivationToken,
+                                tempPassword: custTempPassword,
+                                activationStatus: custActivationStatus
+                              };
+                              try {
+                                if (custTenantId !== selectedCustomerId) {
+                                  await setDoc(doc(db, "tenants", custTenantId), updatedCustomer);
+                                  await deleteDoc(doc(db, "tenants", selectedCustomerId));
+                                } else {
+                                  await setDoc(doc(db, "tenants", selectedCustomerId), updatedCustomer);
                                 }
-                                return c;
-                              }));
-                              setSelectedCustomerId(custTenantId);
-                              console.log("[Customer Manager] Saved updated customer profile details.");
-                              setToast({ message: "Customer profile successfully saved!", type: "success" });
+                                setSelectedCustomerId(custTenantId);
+                                console.log("[Customer Manager] Saved updated customer profile details to Firestore.");
+                                setToast({ message: "Customer profile successfully saved to Firestore!", type: "success" });
+                              } catch (err: any) {
+                                console.error("Failed to update customer in Firestore:", err);
+                                setToast({ message: "Failed to save customer profile.", type: "error" });
+                              }
                             }}
                             className="bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 font-mono text-[10px] font-bold py-2 px-3.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
                           >
                             <Save className="w-3.5 h-3.5" />
                             <span>Save Profile</span>
                           </button>
-
+ 
                           {/* Update button */}
                           <button
-                            onClick={() => {
+                            onClick={async () => {
                               if (!custCompanyName.trim()) {
                                 setToast({ message: "Company Name is required.", type: "error" });
                                 return;
                               }
-                              // Update
-                              setCustomersList(prev => prev.map(c => {
-                                if (c.id === selectedCustomerId) {
-                                  return {
-                                    ...c,
-                                    companyName: custCompanyName,
-                                    id: custTenantId,
-                                    address1: custAddress1,
-                                    address2: custAddress2,
-                                    email: custEmail,
-                                    secondEmail: custSecondEmail,
-                                    phone: custPhone,
-                                    city: custCity,
-                                    state: custState,
-                                    zipCode: custZipCode,
-                                    subdomain: custSubdomain,
-                                    customerPortalAssigned: custCustPortalAssigned,
-                                    performancePortalAssigned: custPerfPortalAssigned,
-                                    activationToken: custActivationToken,
-                                    tempPassword: custTempPassword,
-                                    activationStatus: custActivationStatus
-                                  };
+                              const updatedCustomer: CustomerTenant = {
+                                id: custTenantId,
+                                companyName: custCompanyName,
+                                address1: custAddress1,
+                                address2: custAddress2,
+                                email: custEmail,
+                                secondEmail: custSecondEmail,
+                                phone: custPhone,
+                                city: custCity,
+                                state: custState,
+                                zipCode: custZipCode,
+                                subdomain: custSubdomain,
+                                customerPortalAssigned: custCustPortalAssigned,
+                                performancePortalAssigned: custPerfPortalAssigned,
+                                activationToken: custActivationToken,
+                                tempPassword: custTempPassword,
+                                activationStatus: custActivationStatus
+                              };
+                              try {
+                                if (custTenantId !== selectedCustomerId) {
+                                  await setDoc(doc(db, "tenants", custTenantId), updatedCustomer);
+                                  await deleteDoc(doc(db, "tenants", selectedCustomerId));
+                                } else {
+                                  await setDoc(doc(db, "tenants", selectedCustomerId), updatedCustomer);
                                 }
-                                return c;
-                              }));
-                              setSelectedCustomerId(custTenantId);
-                              console.log("[Customer Manager] Updated database credentials and tenant routing successfully.");
-                              setToast({ message: "Customer Routing Credentials and details Updated!", type: "success" });
+                                setSelectedCustomerId(custTenantId);
+                                console.log("[Customer Manager] Updated database credentials and tenant routing successfully in Firestore.");
+                                setToast({ message: "Customer Routing Credentials and details Updated in Firestore!", type: "success" });
+                              } catch (err: any) {
+                                console.error("Failed to update customer credentials in Firestore:", err);
+                                setToast({ message: "Failed to update customer credentials.", type: "error" });
+                              }
                             }}
                             className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-[10px] font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-600/10"
                           >
@@ -2975,8 +3662,9 @@ export default function SupportDashboard({
                         </>
                       )}
                     </div>
-
-                  </div>
+                  </>
+                )}
+              </div>
 
                 </div>
               </motion.div>
@@ -3044,6 +3732,158 @@ export default function SupportDashboard({
                     </div>
                   ))}
                 </div>
+
+                {/* AWS SES Live Integration & Developer Sandbox Status */}
+                <div className="bg-slate-950 rounded-2xl border border-slate-800 p-6 space-y-6 shadow-xl">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 border-b border-slate-850 pb-4">
+                    <div className="space-y-1 text-left">
+                      <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2 font-mono uppercase tracking-wider">
+                        <Sparkles className="w-4 h-4 text-rose-500" />
+                        <span>AWS SES Sandbox Live Integration Status</span>
+                      </h3>
+                      <p className="text-xs text-slate-400">Monitor environment variable loading indexes and execute live verification loops.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2.5 py-1 rounded font-bold uppercase">
+                        SES SDK v3 & NodeMailer Active
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-left">
+                    {/* Status item 1 */}
+                    <div className="bg-slate-900 rounded-xl border border-slate-800/80 p-3.5 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-500 font-mono font-bold uppercase">AWS Access Key</span>
+                        <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded ${awsEnvStatus?.hasAwsAccessKeyId ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                          {awsEnvStatus?.hasAwsAccessKeyId ? 'LOADED' : 'MISSING'}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-300 font-mono font-semibold truncate">
+                        {awsEnvStatus?.hasAwsAccessKeyId ? '••••••••••••••••' : 'Using Custom Input Fallback'}
+                      </div>
+                      <span className="text-[9px] text-slate-500 block">Required for SDK Client mode</span>
+                    </div>
+
+                    {/* Status item 2 */}
+                    <div className="bg-slate-900 rounded-xl border border-slate-800/80 p-3.5 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-500 font-mono font-bold uppercase">AWS Secret Key</span>
+                        <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded ${awsEnvStatus?.hasAwsSecretAccessKey ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                          {awsEnvStatus?.hasAwsSecretAccessKey ? 'LOADED' : 'MISSING'}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-300 font-mono font-semibold truncate">
+                        {awsEnvStatus?.hasAwsSecretAccessKey ? '••••••••••••••••' : 'Using Custom Input Fallback'}
+                      </div>
+                      <span className="text-[9px] text-slate-500 block">Required for SDK Client mode</span>
+                    </div>
+
+                    {/* Status item 3 */}
+                    <div className="bg-slate-900 rounded-xl border border-slate-800/80 p-3.5 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-500 font-mono font-bold uppercase">SMTP Port & Host</span>
+                        <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded ${awsEnvStatus?.hasSmtpUsername ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                          {awsEnvStatus?.hasSmtpUsername ? 'SMTP SET' : 'SMTP MISSING'}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-300 font-mono font-semibold truncate">
+                        {awsEnvStatus?.smtpServer || "email-smtp.us-east-1.amazonaws.com"}:{awsEnvStatus?.smtpPort || "587"}
+                      </div>
+                      <span className="text-[9px] text-slate-500 block">Required for AWS SES SMTP relay</span>
+                    </div>
+
+                    {/* Status item 4 */}
+                    <div className="bg-slate-900 rounded-xl border border-slate-800/80 p-3.5 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-500 font-mono font-bold uppercase">Region & Sender</span>
+                        <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-400">
+                          SES CONF
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-300 font-mono font-semibold truncate">
+                        {awsEnvStatus?.sesRegion || "us-east-1"} ({awsEnvStatus?.awsSesSender || "sender@yourdomain.com"})
+                      </div>
+                      <span className="text-[9px] text-slate-500 block">Controlled by SES_REGION & AWS_SES_SENDER</span>
+                    </div>
+                  </div>
+
+                  {/* Node.js SES Developer Snippets */}
+                  <div className="border-t border-slate-850 pt-5 space-y-4 text-left">
+                    <h4 className="text-xs font-bold font-mono text-slate-300 uppercase tracking-wider">Node.js SES Client & SMTP Implementation Reference</h4>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Code Block 1: AWS SDK v3 */}
+                      <div className="space-y-2 bg-slate-900 rounded-xl border border-slate-800 p-4 font-sans text-left">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+                          <span className="text-[11px] font-mono font-bold text-cyan-400 flex items-center gap-1.5">
+                            <Terminal className="w-3.5 h-3.5" />
+                            <span>AWS SDK v3 Client (SDK Mode)</span>
+                          </span>
+                          <span className="text-[9px] font-mono text-slate-500">Node.js ESM / TS</span>
+                        </div>
+                        <pre className="text-[9.5px] font-mono text-slate-400 bg-slate-950 p-3 rounded-lg overflow-x-auto leading-relaxed max-h-[220px] overflow-y-auto border border-slate-900">
+{`import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+
+const sesClient = new SESClient({
+  region: "${awsEnvStatus?.sesRegion || 'us-east-1'}",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
+
+const sendEmail = async () => {
+  const command = new SendEmailCommand({
+    Source: "${awsEnvStatus?.awsSesSender || 'sender@yourdomain.com'}",
+    Destination: { ToAddresses: ["recipient@example.com"] },
+    Message: {
+      Subject: { Data: "Test Email from SPARK" },
+      Body: { Text: { Data: "Hello from Cloud Run via SES SDK!" } }
+    }
+  });
+  const res = await sesClient.send(command);
+  return res.MessageId;
+};`}
+                        </pre>
+                      </div>
+
+                      {/* Code Block 2: Nodemailer SMTP */}
+                      <div className="space-y-2 bg-slate-900 rounded-xl border border-slate-800 p-4 font-sans text-left">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+                          <span className="text-[11px] font-mono font-bold text-amber-400 flex items-center gap-1.5">
+                            <Terminal className="w-3.5 h-3.5" />
+                            <span>SMTP Relay Client (Nodemailer Mode)</span>
+                          </span>
+                          <span className="text-[9px] font-mono text-slate-500">Node.js ESM / TS</span>
+                        </div>
+                        <pre className="text-[9.5px] font-mono text-slate-400 bg-slate-950 p-3 rounded-lg overflow-x-auto leading-relaxed max-h-[220px] overflow-y-auto border border-slate-900">
+{`import nodemailer from "nodemailer";
+
+const transporter = nodemailer.createTransport({
+  host: "${awsEnvStatus?.smtpServer || 'email-smtp.us-east-1.amazonaws.com'}",
+  port: ${awsEnvStatus?.smtpPort || 587},
+  secure: ${awsEnvStatus?.smtpPort === "465"},
+  auth: {
+    user: process.env.SMTP_USERNAME,
+    pass: process.env.SMTP_PASSWORD
+  }
+});
+
+const sendEmailSmtp = async () => {
+  const info = await transporter.sendMail({
+    from: "${awsEnvStatus?.awsSesSender || 'sender@yourdomain.com'}",
+    to: "recipient@example.com",
+    subject: "Test Email via SMTP",
+    text: "Hello from Cloud Run via SMTP Relay!"
+  });
+  return info.messageId;
+};`}
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </motion.div>
             )}
 
@@ -3065,8 +3905,18 @@ export default function SupportDashboard({
                     </h2>
                     <p className="text-xs text-slate-400">Query, trace, and audit offline multi-party transcript records across secure isolated tenants.</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20 px-2.5 py-1 rounded font-bold uppercase">
+                  <div className="flex items-center gap-3">
+                    {transcripts.length > 0 && (
+                      <button
+                        onClick={handleDeleteAllBatches}
+                        className="bg-slate-950 hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-900/60 font-mono text-xs font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-2 shadow-md cursor-pointer"
+                        title="Delete all batch transcripts in the system"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Delete All Batches</span>
+                      </button>
+                    )}
+                    <span className="text-[10px] font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20 px-2.5 py-1 rounded font-bold uppercase shrink-0">
                       Compliance Audit Active
                     </span>
                   </div>
@@ -3210,9 +4060,21 @@ export default function SupportDashboard({
                               <h4 className={`text-xs font-bold leading-tight ${isSelected ? "text-slate-100" : "text-slate-200"}`}>
                                 {t.fileName}
                               </h4>
-                              <span className="text-[9px] bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded text-purple-400 font-mono font-bold tracking-tight shrink-0">
-                                {t.duration}
-                              </span>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <span className="text-[9px] bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded text-purple-400 font-mono font-bold tracking-tight">
+                                  {t.duration}
+                                </span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteTranscript(t.id, t.fileName);
+                                  }}
+                                  className="p-1 rounded bg-slate-900 border border-slate-800 text-slate-500 hover:text-rose-400 hover:border-rose-950 transition-all"
+                                  title="Delete transcript record"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
                             </div>
 
                             <div className="flex flex-col gap-1 text-[10px] text-slate-500 font-mono">
@@ -3288,14 +4150,14 @@ export default function SupportDashboard({
                               <div className="bg-slate-900/40 rounded-xl border border-slate-800/60 p-4 max-h-[300px] overflow-y-auto space-y-3.5 scrollbar-thin">
                                 {activeT.fullText.split("\n").map((line, idx) => {
                                   // Parse roles
-                                  const matchesSpeaker = line.match(/^([A-Z0-9_\s-\.]+)\s*(\(([^)]+)\))?\s*:\s*(.*)$/);
+                                  const matchesSpeaker = line.match(/^([A-Za-z0-9_\s-\.]+)\s*(\(([^)]+)\))?\s*:\s*(.*)$/);
                                   if (matchesSpeaker) {
                                     const role = matchesSpeaker[1].trim();
                                     const details = matchesSpeaker[3] ? matchesSpeaker[3].trim() : "";
                                     const dialogue = matchesSpeaker[4].trim();
 
-                                    const isCustomer = role.toLowerCase().includes("customer") || role.toLowerCase().includes("prospect") || role.toLowerCase().includes("lead") || role.toLowerCase().includes("prospect") || role.toLowerCase().includes("dispatcher");
-                                    const isRep = role.toLowerCase().includes("representative") || role.toLowerCase().includes("engineer") || role.toLowerCase().includes("support") || role.toLowerCase().includes("presenter");
+                                    const isCustomer = role.toLowerCase().includes("customer") || role.toLowerCase().includes("prospect") || role.toLowerCase().includes("lead") || role.toLowerCase().includes("dispatcher") || role.toLowerCase().includes("buyer") || role.toLowerCase().includes("client") || role.toLowerCase().includes("speaker b") || role.toLowerCase().includes("s2") || role.toLowerCase().includes("voice 2");
+                                    const isRep = role.toLowerCase().includes("representative") || role.toLowerCase().includes("rep") || role.toLowerCase().includes("engineer") || role.toLowerCase().includes("support") || role.toLowerCase().includes("presenter") || role.toLowerCase().includes("agent") || role.toLowerCase().includes("host") || role.toLowerCase().includes("speaker a") || role.toLowerCase().includes("s1") || role.toLowerCase().includes("voice 1") || role.toLowerCase().includes("manager");
 
                                     return (
                                       <div key={idx} className="space-y-1">
@@ -3631,17 +4493,21 @@ export default function SupportDashboard({
                           setCustActivationStatus("Active");
                           setToast({ message: "Client Portal successfully activated!", type: "success" });
 
-                          // Propagate to the list
-                          setCustomersList(prev => prev.map(c => {
-                            if (c.id === selectedCustomerId) {
-                              return {
-                                ...c,
-                                activationStatus: "Active",
-                                tempPassword: "" // Clear temp password upon activation
-                              };
-                            }
-                            return c;
-                          }));
+                          // Save active enrollment status to firestore
+                          saveUserInvitationToFirestore(custEmail, selectedCustomerId || custTenantId, "tenant_admin", "active");
+
+                          // Propagate to the list in Firestore
+                          const matchedTenant = customersList.find(c => c.id === selectedCustomerId);
+                          if (matchedTenant) {
+                            const updatedTenant: CustomerTenant = {
+                              ...matchedTenant,
+                              activationStatus: "Active",
+                              tempPassword: "" // Clear temp password upon activation
+                            };
+                            setDoc(doc(db, "tenants", selectedCustomerId), updatedTenant).catch(err => {
+                              console.error("Failed to update tenant activation status in Firestore:", err);
+                            });
+                          }
 
                           // Auto close after 2.5s
                           setTimeout(() => {

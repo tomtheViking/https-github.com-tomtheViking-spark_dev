@@ -90,7 +90,7 @@ export default function EnterpriseOutputsView({ activeSession }: EnterpriseOutpu
 
   // Determine company name based on title or customer
   const getCompany = () => {
-    const titleLower = activeSession.title.toLowerCase();
+    const titleLower = (activeSession?.title || "").toLowerCase();
     if (titleLower.includes("widget")) return "Widget Plus Inc.";
     if (titleLower.includes("ufc") || titleLower.includes("ignite")) return "UFC Ignite";
     if (titleLower.includes("harmony")) return "Harmony Craft";
@@ -99,8 +99,8 @@ export default function EnterpriseOutputsView({ activeSession }: EnterpriseOutpu
   };
 
   const companyName = getCompany();
-  const repName = activeSession.repName || "Representative";
-  const customerName = activeSession.customerName || "Customer contact";
+  const repName = activeSession?.repName || "Representative";
+  const customerName = activeSession?.customerName || "Customer contact";
 
   // 1. Salesforce CRM Sync Payload JSON
   const sfPayload = {
@@ -108,10 +108,10 @@ export default function EnterpriseOutputsView({ activeSession }: EnterpriseOutpu
     Representative_Name__c: repName,
     Client_Contact__c: customerName,
     Target_Company__c: companyName,
-    Sales_Methodology_Adherence__c: `${activeSession.analytics?.successPercentage}%`,
-    Confidence_Score__c: activeSession.analytics?.confidenceIndex || 8,
-    Empathy_Score__c: activeSession.analytics?.repEmpathyScore || 8,
-    Key_Pain_Points__c: activeSession.analytics?.keyInsights?.join("; ") || "Integration speed; Commercial flex constraints",
+    Sales_Methodology_Adherence__c: `${activeSession?.analytics?.successPercentage || 0}%`,
+    Confidence_Score__c: activeSession?.analytics?.confidenceIndex || 8,
+    Empathy_Score__c: activeSession?.analytics?.repEmpathyScore || 8,
+    Key_Pain_Points__c: activeSession?.analytics?.keyInsights?.join("; ") || "Integration speed; Commercial flex constraints",
     Coaching_Action_Plan__c: "Deploy pre-demo validation sequence; implement Anxiety Question timing-gate on lock-in concerns.",
     Sync_Timestamp__c: new Date().toISOString()
   };
@@ -121,7 +121,7 @@ export default function EnterpriseOutputsView({ activeSession }: EnterpriseOutpu
     fields: {
       project: { key: "PROD" },
       summary: `[Call Feedback - ${companyName}] Urgent Deployment & Onboarding Cycle constraints`,
-      description: `### Source Call: ${activeSession.title}\n` +
+      description: `### Source Call: ${activeSession?.title || "Unknown"}\n` +
                    `**Client Name**: ${companyName} (${customerName})\n` +
                    `**Representative**: ${repName}\n\n` +
                    `#### Uncovered Product Feedback / Feature Gaps:\n` +
@@ -531,7 +531,7 @@ export default function EnterpriseOutputsView({ activeSession }: EnterpriseOutpu
                     <Settings className="w-3.5 h-3.5 text-teal-600" />
                     [Compliance & Guide Rails] Rules Context
                   </span>
-                  <span className="text-[10px] text-slate-500 italic">Rules evaluated live using Gemini NLP</span>
+                  <span className="text-[10px] text-slate-500 italic">Rules evaluated live using Gemini Language Engine</span>
                 </div>
 
                 <div className="space-y-3">

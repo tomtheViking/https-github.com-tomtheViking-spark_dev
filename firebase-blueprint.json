@@ -130,6 +130,90 @@
         }
       },
       "required": ["contactName", "email", "phone", "address", "city", "state", "zipCode", "cardNumber", "cardExpiry", "cardCvv"]
+    },
+    "UserInvitation": {
+      "title": "UserInvitation",
+      "description": "Represents an invitation sent to a new customer user.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "The email address of the invited user."
+        },
+        "tenant_id": {
+          "type": "string",
+          "description": "The unique tenant identifier."
+        },
+        "role": {
+          "type": "string",
+          "description": "The role assigned to the user (e.g. tenant_admin)."
+        },
+        "enrollment_status": {
+          "type": "string",
+          "enum": ["invited", "active"],
+          "description": "The enrollment status of the user."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "ISO timestamp when the invitation was created."
+        }
+      },
+      "required": ["email", "tenant_id", "role", "enrollment_status", "created_at"]
+    },
+    "CustomerTenant": {
+      "title": "CustomerTenant",
+      "description": "Represents an isolated customer tenant profile.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "companyName": { "type": "string" },
+        "address1": { "type": "string" },
+        "address2": { "type": "string" },
+        "email": { "type": "string" },
+        "secondEmail": { "type": "string" },
+        "phone": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "zipCode": { "type": "string" },
+        "subdomain": { "type": "string" },
+        "customerPortalAssigned": { "type": "boolean" },
+        "performancePortalAssigned": { "type": "boolean" },
+        "activationToken": { "type": "string" },
+        "tempPassword": { "type": "string" },
+        "activationStatus": { "type": "string", "enum": ["Not Invited", "Invited", "Active"] }
+      },
+      "required": ["id", "companyName", "email", "subdomain"]
+    },
+    "TranscriptRecord": {
+      "title": "TranscriptRecord",
+      "description": "Represents a multi-party dialogue transcript record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "userName": { "type": "string" },
+        "date": { "type": "string" },
+        "fileName": { "type": "string" },
+        "duration": { "type": "string" },
+        "fullText": { "type": "string" }
+      },
+      "required": ["id", "tenantId", "fileName", "fullText"]
+    },
+    "TelemetryAlert": {
+      "title": "TelemetryAlert",
+      "description": "Telemetry alerts for service components.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "serviceComponent": { "type": "string" },
+        "awsErrorCode": { "type": "string" },
+        "diagnosticMessage": { "type": "string" },
+        "severity": { "type": "string", "enum": ["critical", "warning", "info"] }
+      },
+      "required": ["id", "timestamp", "tenantId", "serviceComponent", "awsErrorCode", "diagnosticMessage", "severity"]
     }
   },
   "firestore": {
@@ -148,6 +232,22 @@
     "/tenants/{tenantId}/billing/details": {
       "schema": "BillingDetails",
       "description": "Subscription billing contacts and credit/debit payment details partition."
+    },
+    "/users/{userId}": {
+      "schema": "UserInvitation",
+      "description": "User invitations and profile details collection."
+    },
+    "/tenants/{tenantId}": {
+      "schema": "CustomerTenant",
+      "description": "Customer tenant configuration and profile details."
+    },
+    "/transcripts/{transcriptId}": {
+      "schema": "TranscriptRecord",
+      "description": "Offline compliance transcripts for batch dialogue search."
+    },
+    "/alerts/{alertId}": {
+      "schema": "TelemetryAlert",
+      "description": "System telemetry and AWS service error logs collection."
     }
   }
 }

@@ -74,7 +74,12 @@ export interface TeamMember {
   email: string;
   role: string;
   authorizedAccess: string;
-  status: 'Active' | 'Offline';
+  status: 'Active' | 'Offline' | 'Invited';
+  enrollmentToken?: string;
+  tempPassword?: string;
+  sparkId?: string;
+  tenantId?: string;
+  activationDate?: string;
 }
 
 export interface SupportTicket {

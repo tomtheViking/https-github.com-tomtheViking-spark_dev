@@ -17,6 +17,8 @@ interface InteractiveDashboardProps {
   onUpdateSession: (session: CallSession) => void;
   onSelectSession: (session: CallSession) => void;
   activeSession: CallSession | null;
+  authUser?: any;
+  authProfile?: any;
 }
 
 const getNextAnalysisNumber = (existingSessions: CallSession[]): string => {
@@ -34,20 +36,36 @@ export default function InteractiveDashboard({
   onAddSession,
   onUpdateSession,
   onSelectSession,
-  activeSession
+  activeSession,
+  authUser,
+  authProfile
 }: InteractiveDashboardProps) {
   const [transcriptInput, setTranscriptInput] = useState<string>("");
-  const [customerName, setCustomerName] = useState<string>("Jane Smith");
-  const [repName, setRepName] = useState<string>("John Sales");
+  const [customerName, setCustomerName] = useState<string>("");
+  const [repName, setRepName] = useState<string>("");
   const [callTitle, setCallTitle] = useState<string>("Enterprise Consultation Call");
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [analysisStatusText, setAnalysisStatusText] = useState<string>("");
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
+  
+  // Extracted Token metadata states
+  const [detectedPlatform, setDetectedPlatform] = useState<"zoom" | "gong" | "google" | "microsoft" | "teams" | null>(null);
+  const [detectedDate, setDetectedDate] = useState<string | null>(null);
+  const [detectedToken, setDetectedToken] = useState<string | null>(null);
+
+  // Sync representative name to logged in authenticated rep
+  useEffect(() => {
+    if (authUser) {
+      setRepName(authProfile?.name || authUser.displayName || authUser.email?.split("@")[0] || "Representative");
+    }
+  }, [authUser, authProfile]);
   const [apiError, setApiError] = useState<string | null>(null);
   
   // File upload / attachment states
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [attachedFile, setAttachedFile] = useState<{ name: string; size: number; type: string } | null>(null);
+  const [fileEncoding, setFileEncoding] = useState<string>("utf-8");
+  const [rawFileObject, setRawFileObject] = useState<File | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: React.DragEvent) => {
@@ -76,62 +94,377 @@ export default function InteractiveDashboard({
     }
   };
 
-  const handleFileProcess = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target?.result as string;
-      if (!text) return;
+  const loadPdfJs = (): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      if ((window as any).pdfjsLib) {
+        resolve((window as any).pdfjsLib);
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+      script.onload = () => {
+        const pdfjsLib = (window as any).pdfjsLib;
+        if (pdfjsLib) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+          resolve(pdfjsLib);
+        } else {
+          reject(new Error("PDF.js library could not be loaded."));
+        }
+      };
+      script.onerror = () => reject(new Error("Failed to load PDF.js script."));
+      document.head.appendChild(script);
+    });
+  };
 
-      let parsedTitle = file.name.replace(/\.[^/.]+$/, ""); // strip extension
-      parsedTitle = parsedTitle
-        .split(/[-_]/)
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+  const parsePdfText = async (arrayBuffer: ArrayBuffer): Promise<string> => {
+    const pdfjsLib = await loadPdfJs();
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    let fullText = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => item.str)
         .join(" ");
+      fullText += pageText + "\n";
+    }
+    return fullText;
+  };
 
-      let parsedCust = "Jane Smith";
-      let parsedRep = "John Sales";
-      let parsedTranscript = text;
+  const parseSpeakerLabel = (line: string) => {
+    const colonIndex = line.indexOf(":");
+    if (colonIndex === -1) return null;
+    const prefix = line.slice(0, colonIndex).trim();
+    
+    const parenStart = prefix.indexOf("(");
+    const parenEnd = prefix.lastIndexOf(")");
+    if (parenStart !== -1 && parenEnd !== -1 && parenEnd > parenStart) {
+      const speakerType = prefix.slice(0, parenStart).trim().toLowerCase();
+      const nameAndRole = prefix.slice(parenStart + 1, parenEnd).trim();
+      return { speakerType, nameAndRole };
+    } else {
+      const lowerPrefix = prefix.toLowerCase();
+      if (lowerPrefix === "representative" || lowerPrefix === "rep" || lowerPrefix === "sales rep" || lowerPrefix === "sales representative" || lowerPrefix === "presenter" || lowerPrefix === "host" || lowerPrefix === "agent" || lowerPrefix === "manager" || lowerPrefix === "speaker a" || lowerPrefix === "s1" || lowerPrefix === "voice 1") {
+        return { speakerType: "representative", nameAndRole: null };
+      }
+      if (lowerPrefix === "customer" || lowerPrefix === "client" || lowerPrefix === "prospect" || lowerPrefix === "buyer" || lowerPrefix === "speaker b" || lowerPrefix === "s2" || lowerPrefix === "voice 2") {
+        return { speakerType: "customer", nameAndRole: null };
+      }
+      return { speakerType: "unknown", nameAndRole: prefix };
+    }
+  };
 
-      if (file.type === "application/json" || file.name.endsWith(".json")) {
-        try {
-          const json = JSON.parse(text);
-          if (json.transcriptText || json.transcript || json.text) {
-            parsedTranscript = json.transcriptText || json.transcript || json.text;
+  const extractNamesAndRolesFromText = (text: string) => {
+    let extractedCust = "";
+    let extractedRep = "";
+    
+    const lines = text.split("\n");
+    const uniqueSpeakers: string[] = [];
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      
+      const colonIndex = trimmed.indexOf(":");
+      if (colonIndex === -1) continue;
+      
+      const prefix = trimmed.slice(0, colonIndex).trim();
+      if (!prefix || prefix.length > 50) continue;
+      
+      // Check for parentheses
+      const parenStart = prefix.indexOf("(");
+      const parenEnd = prefix.lastIndexOf(")");
+      if (parenStart !== -1 && parenEnd !== -1 && parenEnd > parenStart) {
+        const speakerType = prefix.slice(0, parenStart).trim().toLowerCase();
+        const nameAndRole = prefix.slice(parenStart + 1, parenEnd).trim();
+        
+        if (speakerType.includes("rep") || speakerType.includes("agent") || speakerType.includes("sales") || speakerType.includes("presenter")) {
+          if (!extractedRep && nameAndRole && !["representative", "rep", "presenter"].includes(nameAndRole.toLowerCase())) {
+            extractedRep = nameAndRole;
           }
-          if (json.title || json.callTitle) {
-            parsedTitle = json.title || json.callTitle;
+        } else if (speakerType.includes("cust") || speakerType.includes("client") || speakerType.includes("prospect") || speakerType.includes("buyer")) {
+          if (!extractedCust && nameAndRole && !["customer", "client", "prospect"].includes(nameAndRole.toLowerCase())) {
+            extractedCust = nameAndRole;
           }
-          if (json.customerName || json.customer) {
-            parsedCust = json.customerName || json.customer;
+        }
+      } else {
+        // Plain speaker label (no parentheses)
+        const lowerPrefix = prefix.toLowerCase();
+        const isGenericRep = ["representative", "rep", "sales rep", "sales representative", "presenter", "agent"].includes(lowerPrefix);
+        const isGenericCust = ["customer", "client", "prospect", "buyer"].includes(lowerPrefix);
+        
+        if (!isGenericRep && !isGenericCust) {
+          if (!uniqueSpeakers.includes(prefix)) {
+            uniqueSpeakers.push(prefix);
           }
-          if (json.repName || json.rep || json.representative) {
-            parsedRep = json.repName || json.rep || json.representative;
-          }
-        } catch (err) {
-          console.warn("Could not parse JSON file, treating as plain text");
+        }
+      }
+    }
+    
+    // If we didn't extract representative or customer via explicit paren tags, use the chronological speaker sequence:
+    if (!extractedRep && uniqueSpeakers.length > 0) {
+      extractedRep = uniqueSpeakers[0];
+    }
+    if (!extractedCust && uniqueSpeakers.length > 1) {
+      extractedCust = uniqueSpeakers[1];
+    } else if (!extractedCust && uniqueSpeakers.length === 1 && uniqueSpeakers[0] !== extractedRep) {
+      extractedCust = uniqueSpeakers[0];
+    }
+    
+    return { customer: extractedCust, rep: extractedRep };
+  };
+
+  interface ExtractedTokenMetadata {
+    platform: "zoom" | "gong" | "google" | "microsoft" | "teams" | null;
+    date: string | null;
+    tokenId: string | null;
+    customerName: string | null;
+    repName: string | null;
+  }
+
+  const parseTokenMetadata = (text: string, fileName: string): ExtractedTokenMetadata => {
+    let platform: "zoom" | "gong" | "google" | "microsoft" | "teams" | null = null;
+    let date: string | null = null;
+    let tokenId: string | null = null;
+    let customerName: string | null = null;
+    let repName: string | null = null;
+
+    // Try parsing file name for platform
+    const lowerFileName = fileName.toLowerCase();
+    if (lowerFileName.includes("zoom")) platform = "zoom";
+    else if (lowerFileName.includes("gong")) platform = "gong";
+    else if (lowerFileName.includes("meet") || lowerFileName.includes("google")) platform = "google";
+    else if (lowerFileName.includes("teams") || lowerFileName.includes("microsoft")) platform = "microsoft";
+
+    // Try parsing file name for date (e.g. 2026-07-09 or 2026_07_09)
+    const dateRegex = /(\d{4}[-_]\d{2}[-_]\d{2})/;
+    const matchFileNameDate = lowerFileName.match(dateRegex);
+    if (matchFileNameDate) {
+      date = matchFileNameDate[1].replace(/_/g, "-");
+    }
+
+    // Scan text content line by line
+    const lines = text.split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const lowerLine = trimmed.toLowerCase();
+
+      // 1. Platform detection
+      if (!platform) {
+        if (lowerLine.includes("gong.io") || lowerLine.includes("gong transcript")) platform = "gong";
+        else if (lowerLine.includes("zoom meeting") || lowerLine.includes("zoom transcript")) platform = "zoom";
+        else if (lowerLine.includes("google meet") || lowerLine.includes("google transcript")) platform = "google";
+        else if (lowerLine.includes("microsoft teams") || lowerLine.includes("teams transcript")) platform = "microsoft";
+      }
+
+      // 2. Token / Meeting ID detection
+      if (!tokenId) {
+        const tokenMatch = trimmed.match(/(?:meeting id|gong-token|token|transcript id|session id|id)\s*[:=]\s*([a-zA-Z0-9_-]+)/i);
+        if (tokenMatch) {
+          tokenId = tokenMatch[1].trim();
         }
       }
 
-      setTranscriptInput(parsedTranscript);
-      setCallTitle(parsedTitle);
-      setCustomerName(parsedCust);
-      setRepName(parsedRep);
+      // 3. Date detection (e.g. Date: 2026-07-09 or Meeting Date: July 9, 2026)
+      if (!date) {
+        const dateMatch = trimmed.match(/(?:date|meeting date|timestamp|created at)\s*[:=]\s*([^\n:]+)/i);
+        if (dateMatch) {
+          const potentialDate = dateMatch[1].trim();
+          const parsedMs = Date.parse(potentialDate);
+          if (!isNaN(parsedMs)) {
+            date = new Date(parsedMs).toISOString().split("T")[0];
+          } else {
+            const isoMatch = potentialDate.match(/\d{4}-\d{2}-\d{2}/);
+            if (isoMatch) date = isoMatch[0];
+          }
+        }
+      }
+      
+      // 4. Check for explicit JSON-like or header lines for Customer or Rep
+      if (!customerName) {
+        const custMatch = trimmed.match(/(?:customer name|customer|client)\s*[:=]\s*([^\n:]+)/i);
+        if (custMatch) customerName = custMatch[1].trim();
+      }
+      if (!repName) {
+        const repMatch = trimmed.match(/(?:representative|rep name|rep|agent|host)\s*[:=]\s*([^\n:]+)/i);
+        if (repMatch) repName = repMatch[1].trim();
+      }
+    }
+
+    return { platform, date, tokenId, customerName, repName };
+  };
+
+  const decodeAndProcessFile = async (file: File, encoding: string) => {
+    let parsedTitle = file.name.replace(/\.[^/.]+$/, ""); // strip extension
+    parsedTitle = parsedTitle
+      .split(/[-_]/)
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+
+    let parsedCust = "";
+    let parsedRep = "";
+
+    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
       setAttachedFile({
         name: file.name,
         size: file.size,
-        type: file.type || "text/plain"
+        type: file.type || "application/pdf"
       });
+      setTranscriptInput("Extracting text from PDF, please wait...");
       setApiError(null);
-    };
-    reader.readAsText(file);
+
+      try {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const buffer = e.target?.result as ArrayBuffer;
+          if (!buffer) {
+            setApiError("Could not read PDF file buffer.");
+            setTranscriptInput("");
+            return;
+          }
+          try {
+            const extractedText = await parsePdfText(buffer);
+            if (!extractedText.trim()) {
+              setApiError("The PDF seems to contain no readable text (it might be scanned/image-only).");
+              setTranscriptInput("");
+              return;
+            }
+            setTranscriptInput(extractedText);
+            setCallTitle(parsedTitle);
+            
+            const { customer, rep } = extractNamesAndRolesFromText(extractedText);
+            
+            // Apply Token Metadata Extractor
+            const meta = parseTokenMetadata(extractedText, file.name);
+            setDetectedPlatform(meta.platform);
+            setDetectedDate(meta.date);
+            setDetectedToken(meta.tokenId);
+
+            setCustomerName(meta.customerName || customer);
+            if (authUser) {
+              setRepName(authProfile?.name || authUser.displayName || authUser.email?.split("@")[0] || "Representative");
+            } else {
+              setRepName(meta.repName || rep);
+            }
+            
+            setApiError(null);
+          } catch (err: any) {
+            console.error("PDF parsing error:", err);
+            setApiError("Failed to extract text from PDF: " + (err.message || "Unknown error"));
+            setTranscriptInput("");
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      } catch (err: any) {
+        setApiError("FileReader error: " + (err.message || "Unknown error"));
+      }
+      return;
+    }
+
+    // Text file decoding
+    try {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const buffer = e.target?.result as ArrayBuffer;
+        if (!buffer) return;
+
+        let text = "";
+        try {
+          const decoder = new TextDecoder(encoding);
+          text = decoder.decode(buffer);
+        } catch (decErr: any) {
+          console.error("TextDecoder failed, falling back to UTF-8:", decErr);
+          try {
+            const fallbackDecoder = new TextDecoder("utf-8");
+            text = fallbackDecoder.decode(buffer);
+          } catch (fbErr) {
+            text = "";
+          }
+        }
+
+        if (!text) {
+          setApiError("Could not decode file characters. Try a different encoding option.");
+          return;
+        }
+
+        let parsedTranscript = text;
+
+        if (file.type === "application/json" || file.name.endsWith(".json")) {
+          try {
+            const json = JSON.parse(text);
+            if (json.transcriptText || json.transcript || json.text) {
+              parsedTranscript = json.transcriptText || json.transcript || json.text;
+            }
+            if (json.title || json.callTitle) {
+              parsedTitle = json.title || json.callTitle;
+            }
+            if (json.customerName || json.customer) {
+              parsedCust = json.customerName || json.customer;
+            }
+            if (json.repName || json.rep || json.representative) {
+              parsedRep = json.repName || json.rep || json.representative;
+            }
+          } catch (err) {
+            console.warn("Could not parse JSON file, treating as plain text");
+          }
+        } else {
+          const { customer, rep } = extractNamesAndRolesFromText(text);
+          parsedCust = customer;
+          parsedRep = rep;
+        }
+
+        // Apply Token Metadata Extractor
+        const meta = parseTokenMetadata(parsedTranscript, file.name);
+        setDetectedPlatform(meta.platform);
+        setDetectedDate(meta.date);
+        setDetectedToken(meta.tokenId);
+
+        setTranscriptInput(parsedTranscript);
+        setCallTitle(parsedTitle);
+        setCustomerName(meta.customerName || parsedCust);
+        if (authUser) {
+          setRepName(authProfile?.name || authUser.displayName || authUser.email?.split("@")[0] || "Representative");
+        } else {
+          setRepName(meta.repName || parsedRep);
+        }
+
+        setAttachedFile({
+          name: file.name,
+          size: file.size,
+          type: file.type || "text/plain"
+        });
+        setApiError(null);
+      };
+      reader.readAsArrayBuffer(file);
+    } catch (err: any) {
+      setApiError("FileReader error: " + (err.message || "Unknown error"));
+    }
   };
+
+  const handleFileProcess = async (file: File) => {
+    setRawFileObject(file);
+    // Let the useEffect handle the actual parsing/decoding when state is set
+  };
+
+  useEffect(() => {
+    if (rawFileObject) {
+      decodeAndProcessFile(rawFileObject, fileEncoding);
+    }
+  }, [fileEncoding, rawFileObject]);
 
   const handleClearFile = () => {
     setAttachedFile(null);
+    setRawFileObject(null);
+    setFileEncoding("utf-8");
     setTranscriptInput("");
     setCallTitle("Enterprise Consultation Call");
-    setCustomerName("Jane Smith");
-    setRepName("John Sales");
+    setCustomerName("");
+    setRepName(authUser ? (authProfile?.name || authUser.displayName || authUser.email?.split("@")[0] || "Representative") : "");
+    setDetectedPlatform(null);
+    setDetectedDate(null);
+    setDetectedToken(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -207,15 +540,16 @@ export default function InteractiveDashboard({
       const analyticsResult: CallAnalytics = await response.json();
 
       const newSession: CallSession = {
-        id: "call-" + Date.now(),
-        title: callTitle || "Manual Interaction Analysis",
+        id: detectedToken || "call-" + Date.now(),
+        title: callTitle || (detectedPlatform ? `Import: ${detectedPlatform.toUpperCase()} Call` : "Manual Interaction Analysis"),
         customerName: customerName || "Unknown Customer",
-        repName: repName || "Representative",
-        date: new Date().toISOString(),
+        repName: authProfile?.name || authUser?.displayName || repName || "Representative",
+        date: detectedDate || new Date().toISOString(),
         transcriptText: transcriptInput,
         analytics: analyticsResult,
         status: "analyzed",
-        analysisNumber: getNextAnalysisNumber(sessions)
+        analysisNumber: getNextAnalysisNumber(sessions),
+        tenantId: authProfile?.tenant_id || undefined
       };
 
       onAddSession(newSession);
@@ -255,8 +589,8 @@ export default function InteractiveDashboard({
 
   const handleReset = () => {
     setTranscriptInput("");
-    setCustomerName("Jane Smith");
-    setRepName("John Sales");
+    setCustomerName("");
+    setRepName("");
     setCallTitle("Enterprise Consultation Call");
     setSelectedTemplate("");
     setAttachedFile(null);
@@ -349,6 +683,71 @@ export default function InteractiveDashboard({
                   </button>
                 </div>
 
+                {/* Encoding Selector and Warning Banner (only for non-PDFs) */}
+                {rawFileObject && !rawFileObject.name.toLowerCase().endsWith(".pdf") && (
+                  <div className="bg-amber-50/75 border border-amber-200/50 rounded-xl px-4 py-3 text-xs text-amber-850 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-semibold text-amber-950">Are characters scrambled, illegible, or showing gibberish?</p>
+                        <p className="text-amber-700 text-[11px] mt-0.5">
+                          This usually happens if the file uses a non-UTF-8 text encoding. Select a matching encoding format below to instantly fix and re-decode the file text.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 bg-white border border-amber-200/70 rounded-lg px-2 py-1.5 shadow-2xs">
+                      <span className="font-semibold text-amber-900 text-[11px]">File Encoding:</span>
+                      <select
+                        value={fileEncoding}
+                        onChange={(e) => setFileEncoding(e.target.value)}
+                        className="bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 font-semibold cursor-pointer"
+                        id="encoding-selector-dropdown"
+                      >
+                        <option value="utf-8">UTF-8 (Default)</option>
+                        <option value="windows-1252">Windows-1252 (Western ANSI)</option>
+                        <option value="iso-8859-1">ISO-8859-1 (Latin-1)</option>
+                        <option value="utf-16le">UTF-16 LE (Little Endian)</option>
+                        <option value="utf-16be">UTF-16 BE (Big Endian)</option>
+                        <option value="ascii">US-ASCII</option>
+                        <option value="shift-jis">Shift-JIS (Japanese)</option>
+                        <option value="gbk">GBK (Chinese)</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {/* Extracted Token Metadata Display */}
+                {detectedPlatform && (
+                  <div className="bg-slate-900 border border-slate-800 text-teal-400 rounded-xl px-4 py-3 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-teal-500/10 border border-teal-500/25 flex items-center justify-center font-bold text-xs shrink-0 shadow-inner">
+                        <Terminal className="w-5 h-5 text-teal-400" />
+                      </div>
+                      <div>
+                        <span className="font-bold text-teal-300 block text-xs tracking-wider uppercase">
+                          Detected Token Metadata
+                        </span>
+                        <span className="text-slate-400 block text-[10px] mt-0.5">
+                          Assigned to rep based on Gong, Zoom, Google Meet token headers.
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[10px] font-mono">
+                      <div className="bg-slate-800/80 border border-slate-700 rounded px-2.5 py-1 text-slate-300">
+                        Platform: <span className="text-teal-300 font-bold capitalize">{detectedPlatform}</span>
+                      </div>
+                      <div className="bg-slate-800/80 border border-slate-700 rounded px-2.5 py-1 text-slate-300">
+                        Token Date: <span className="text-teal-300 font-bold">{detectedDate || "Current Date"}</span>
+                      </div>
+                      {detectedToken && (
+                        <div className="bg-slate-800/80 border border-slate-700 rounded px-2.5 py-1 text-slate-300 max-w-[150px] truncate" title={detectedToken}>
+                          ID: <span className="text-teal-300 font-bold">{detectedToken}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Metadata Editor */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
@@ -370,6 +769,7 @@ export default function InteractiveDashboard({
                       type="text"
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
+                      placeholder="e.g. Sarah Jenkins (extracted from file)"
                       className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 font-medium text-slate-800"
                     />
                   </div>
@@ -381,6 +781,7 @@ export default function InteractiveDashboard({
                       type="text"
                       value={repName}
                       onChange={(e) => setRepName(e.target.value)}
+                      placeholder="e.g. Alex Mercer (extracted from file)"
                       className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 font-medium text-slate-800"
                     />
                   </div>
@@ -541,8 +942,7 @@ export default function InteractiveDashboard({
 
                 <div className="flex items-center space-x-6 shrink-0 bg-slate-50 p-3 rounded-xl border border-slate-100">
                   <div className="text-sm font-semibold text-slate-600">
-                    <div>Customer: <span className="font-bold text-slate-800">{activeSession.customerName}</span></div>
-                    <div>Representative: <span className="font-bold text-slate-800">{activeSession.repName}</span></div>
+                    <div>Presenter: <span className="font-bold text-slate-800">{activeSession.repName || "No Presenter Detected"}</span></div>
                   </div>
                 </div>
               </div>
@@ -644,12 +1044,12 @@ export default function InteractiveDashboard({
                 <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col justify-between">
                   <div>
                     <h3 className="font-display font-semibold text-slate-900 text-sm">Speaking vs Listening Ratio</h3>
-                    <p className="text-[10px] text-slate-400">Representative vs Customer dialogue distribution</p>
+                    <p className="text-[10px] text-slate-400">Presenter vs Customer dialogue distribution</p>
                   </div>
 
                   <div className="space-y-3 my-4">
                     <div className="flex justify-between text-xs font-mono font-medium">
-                      <span className="text-teal-600">Representative: {activeSession.analytics.speakingListeningRatio.split(":")[0]}%</span>
+                      <span className="text-teal-600">Presenter: {activeSession.analytics.speakingListeningRatio.split(":")[0]}%</span>
                       <span className="text-slate-500">Customer: {activeSession.analytics.speakingListeningRatio.split(":")[1]}%</span>
                     </div>
                     
@@ -792,7 +1192,7 @@ export default function InteractiveDashboard({
                         </div>
                       </div>
 
-                      {/* Milton Corrected Text */}
+                      {/* Refined Alignment Phrasing */}
                       <div className="space-y-1">
                         <div className="flex justify-between items-center">
                           <span className="text-[10px] font-bold text-green-600 uppercase tracking-wider block">Refined Alignment Phrasing</span>
@@ -838,7 +1238,7 @@ export default function InteractiveDashboard({
                   </div>
                   <div>
                     <h3 className="font-display font-semibold text-slate-900 text-sm">Real-Time Buyer Alignment Feed</h3>
-                    <p className="text-[10px] text-slate-400">Live configurations, custom budget choices, and lodged concerns from the Customer Facing Portal</p>
+                    <p className="text-[10px] text-slate-400">Live configurations, custom budget choices, and lodged concerns from the Management Interface</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 bg-teal-50 border border-teal-200 px-2.5 py-1 rounded-full uppercase tracking-wider font-mono text-[9px] font-bold text-teal-700">
@@ -886,7 +1286,7 @@ export default function InteractiveDashboard({
                     </div>
                   ) : (
                     <div className="p-4 border-2 border-dashed border-slate-150 rounded-xl text-center text-slate-400 text-xs py-8">
-                      No custom budget configuration received yet. Share the Customer Facing Portal with your prospect to let them customize trial sizes.
+                      No custom budget configuration received yet. Share the Management Interface with your prospect to let them customize trial sizes.
                     </div>
                   )}
                 </div>

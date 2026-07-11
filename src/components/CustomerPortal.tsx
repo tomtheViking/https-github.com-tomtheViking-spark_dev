@@ -36,7 +36,8 @@ import {
   Video,
   Globe,
   Cpu,
-  Play
+  Play,
+  Loader2
 } from "lucide-react";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
@@ -64,7 +65,7 @@ export default function CustomerPortal({
   onAddTicket
 }: CustomerPortalProps) {
   // Navigation Sidebar State inside Customer Portal
-  const [activeSubTab, setActiveSubTab] = useState<"dashboard" | "discovery" | "integrations" | "team" | "billing" | "contact">("discovery");
+  const [activeSubTab, setActiveSubTab] = useState<"dashboard" | "discovery" | "integrations" | "team" | "billing" | "contact">("dashboard");
 
   // Filter & Search states for Discovery
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -346,7 +347,7 @@ export default function CustomerPortal({
   
   const defaultTranscripts = {
     zoom: `Representative (Mark): I know you want to protect your team's budget, but will we integrate next week or the week after? Automating this will allow you to scale instantly.\nCustomer (Phil Muffins): Yes, we have standard legacy budgets but scaling instantly is exactly our Q3 goal.`,
-    gong: `Representative (Sarah): It is critical to eliminate manual processes. I'm sure you feel the transition is already happening. Is it worth seeing if this solves it?\nCustomer (Liz Gallop): Yes, we are feeling the pressure of manual pipeline audits. A real-time Milton persuasion model makes complete sense.`,
+    gong: `Representative (Sarah): It is critical to eliminate manual processes. I'm sure you feel the transition is already happening. Is it worth seeing if this solves it?\nCustomer (Liz Gallop): Yes, we are feeling the pressure of manual pipeline audits. A real-time persuasion model makes complete sense.`,
     google: `Representative (Mark): As we look at this transition, we feel that saving 15 hours per rep each week is exactly what you need. Automating this will double your outreach capability.\nCustomer (John): Yes, actually. We have been struggling with manual transcription for ages.`,
     microsoft: `Representative (Sarah): Our platform acts as a secure container and we can establish standard protocols automatically. I know you want to ensure total data compliance.\nCustomer (Liz Gallop): Perfect. That fits our security guidelines.`
   };
@@ -468,18 +469,23 @@ export default function CustomerPortal({
   // Form states for adding new member
   const [newMemberName, setNewMemberName] = useState<string>("");
   const [newMemberEmail, setNewMemberEmail] = useState<string>("");
+  const [newMemberEmailConfirm, setNewMemberEmailConfirm] = useState<string>("");
   const [newMemberRole, setNewMemberRole] = useState<string>("");
   const [newMemberAccess, setNewMemberAccess] = useState<string>("Administrator");
   const [newMemberStatus, setNewMemberStatus] = useState<"Active" | "Offline">("Active");
+  const [newMemberSparkId, setNewMemberSparkId] = useState<string>("");
+  const [newMemberTenantId, setNewMemberTenantId] = useState<string>("");
+  const [newMemberActivationDate, setNewMemberActivationDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
   // Error/Success messages for team actions
   const [teamError, setTeamError] = useState<string | null>(null);
   const [teamSuccess, setTeamSuccess] = useState<string | null>(null);
+  const [isInviting, setIsInviting] = useState<boolean>(false);
 
   const currentActiveMember = teamMembers.find(m => m.id === activeMemberId) || teamMembers[0];
   const isCurrentUserAdmin = currentActiveMember?.authorizedAccess === "Administrator";
 
-  const handleAddMember = (e: React.FormEvent) => {
+  const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
     setTeamError(null);
     setTeamSuccess(null);
@@ -499,6 +505,16 @@ export default function CustomerPortal({
       return;
     }
 
+    if (!newMemberEmailConfirm.trim()) {
+      setTeamError("Please enter the confirmation email to verify spelling.");
+      return;
+    }
+
+    if (newMemberEmail.trim().toLowerCase() !== newMemberEmailConfirm.trim().toLowerCase()) {
+      setTeamError("Validation Failed: The spelling of the confirmation email does not match the invitation email.");
+      return;
+    }
+
     if (!newMemberEmail.includes("@") || !newMemberEmail.includes(".")) {
       setTeamError("Please provide a valid email address.");
       return;
@@ -509,25 +525,106 @@ export default function CustomerPortal({
       return;
     }
 
-    const newMember: TeamMember = {
-      id: "member-" + Date.now(),
-      name: newMemberName.trim(),
-      email: newMemberEmail.trim().toLowerCase(),
-      role: newMemberRole.trim(),
-      authorizedAccess: newMemberAccess,
-      status: newMemberStatus
-    };
+    setIsInviting(true);
+    const assignedTenantId = newMemberTenantId.trim() || activeSession?.tenantId || "CLIENT-A";
+    const finalSparkId = newMemberSparkId.trim() || ("SPK-" + Math.floor(10000 + Math.random() * 90000));
+    const finalActivationDate = newMemberActivationDate || new Date().toISOString().split("T")[0];
 
-    setTeamMembers(prev => [...prev, newMember]);
-    setNewMemberName("");
-    setNewMemberEmail("");
-    setNewMemberRole("");
-    setNewMemberAccess("Administrator");
-    setTeamSuccess(`Successfully invited ${newMember.name} as a team member!`);
+    const generatedTempPassword = `SPARK-temp-${Math.floor(1000 + Math.random() * 9000)}`;
+    const generatedToken = `tok-${Math.floor(100000 + Math.random() * 900000)}`;
 
-    setTimeout(() => {
-      setTeamSuccess(null);
-    }, 4000);
+    try {
+      const response = await fetch("/api/aws-ses/invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: newMemberEmail.trim().toLowerCase(),
+          tenantId: assignedTenantId,
+          role: newMemberAccess === "Administrator" ? "tenant_admin" : "tenant_user",
+          origin: window.location.origin,
+          temporaryPassword: generatedTempPassword,
+          enrollmentToken: generatedToken,
+          name: newMemberName.trim(),
+          sparkId: finalSparkId,
+          activationDate: finalActivationDate
+        }),
+      });
+
+      const data = await response.json();
+
+      let finalTempPassword = generatedTempPassword;
+      let finalEnrollmentToken = generatedToken;
+
+      if (response.ok && data.success) {
+        if (data.temporaryPassword) finalTempPassword = data.temporaryPassword;
+        if (data.enrollmentToken) finalEnrollmentToken = data.enrollmentToken;
+        
+        setTeamSuccess(`Successfully dispatched enrollment email to ${newMemberEmail.trim()}!`);
+      } else {
+        console.warn("API returned error, using fallback local registration:", data.error);
+        setTeamSuccess(`Invited ${newMemberName.trim()} (Local sync fallback: SES is off or sandbox is limited).`);
+      }
+
+      const newMember: TeamMember = {
+        id: "member-" + Date.now(),
+        name: newMemberName.trim(),
+        email: newMemberEmail.trim().toLowerCase(),
+        role: newMemberRole.trim(),
+        authorizedAccess: newMemberAccess,
+        status: "Invited",
+        tempPassword: finalTempPassword,
+        enrollmentToken: finalEnrollmentToken,
+        sparkId: finalSparkId,
+        tenantId: assignedTenantId,
+        activationDate: finalActivationDate
+      };
+
+      setTeamMembers(prev => [...prev, newMember]);
+      setNewMemberName("");
+      setNewMemberEmail("");
+      setNewMemberEmailConfirm("");
+      setNewMemberRole("");
+      setNewMemberAccess("Administrator");
+      setNewMemberSparkId("");
+      setNewMemberTenantId("");
+      setNewMemberActivationDate(new Date().toISOString().split('T')[0]);
+
+    } catch (err: any) {
+      console.error("Failed to connect to enrollment API:", err);
+      setTeamError("Failed to send AWS SES email, but added member to local workspace.");
+      
+      const newMember: TeamMember = {
+        id: "member-" + Date.now(),
+        name: newMemberName.trim(),
+        email: newMemberEmail.trim().toLowerCase(),
+        role: newMemberRole.trim(),
+        authorizedAccess: newMemberAccess,
+        status: "Invited",
+        tempPassword: generatedTempPassword,
+        enrollmentToken: generatedToken,
+        sparkId: finalSparkId,
+        tenantId: assignedTenantId,
+        activationDate: finalActivationDate
+      };
+
+      setTeamMembers(prev => [...prev, newMember]);
+      setNewMemberName("");
+      setNewMemberEmail("");
+      setNewMemberEmailConfirm("");
+      setNewMemberRole("");
+      setNewMemberAccess("Administrator");
+      setNewMemberSparkId("");
+      setNewMemberTenantId("");
+      setNewMemberActivationDate(new Date().toISOString().split('T')[0]);
+    } finally {
+      setIsInviting(false);
+      setTimeout(() => {
+        setTeamSuccess(null);
+        setTeamError(null);
+      }, 5000);
+    }
   };
 
   const handleDeleteMember = (idToDelete: string) => {
@@ -850,10 +947,10 @@ export default function CustomerPortal({
     if (searchQuery.trim() !== "") {
       const q = searchQuery.toLowerCase();
       const matchText = (
-        s.title.toLowerCase().includes(q) ||
-        s.customerName.toLowerCase().includes(q) ||
-        s.repName.toLowerCase().includes(q) ||
-        (s.transcriptText && s.transcriptText.toLowerCase().includes(q))
+        (s.title || "").toLowerCase().includes(q) ||
+        (s.customerName || "").toLowerCase().includes(q) ||
+        (s.repName || "").toLowerCase().includes(q) ||
+        (s.transcriptText && (s.transcriptText || "").toLowerCase().includes(q))
       );
       if (!matchText) return false;
     }
@@ -868,7 +965,7 @@ export default function CustomerPortal({
     // 4. Date Filter (Mock ranges based on active date in template)
     if (dateRangeFilter === "7d") {
       // Show only recent items or mock match
-      return s.id === "seed-arachnid-systems" || s.title.toLowerCase().includes("equine") || s.title.toLowerCase().includes("planning");
+      return s.id === "seed-arachnid-systems" || (s.title || "").toLowerCase().includes("equine") || (s.title || "").toLowerCase().includes("planning");
     }
 
     return true;
@@ -1459,7 +1556,7 @@ export default function CustomerPortal({
                   Communications & API Integrations
                 </h1>
                 <p className="text-xs text-slate-500">
-                  Connect third-party meeting platforms directly to import conversations for automatic Milton analysis.
+                  Connect third-party meeting platforms directly to import conversations for automatic dialogue analysis.
                 </p>
               </div>
 
@@ -1581,347 +1678,7 @@ export default function CustomerPortal({
                 </div>
               </div>
 
-              {/* Developer API Portal & Ingest Sandbox */}
-              <div className="border-t border-slate-200 pt-8 mt-4 space-y-6">
-                <div>
-                  <div className="flex items-center space-x-2">
-                    <div className="p-1.5 bg-slate-900 rounded-lg text-cyan-400">
-                      <Cpu className="w-5 h-5" />
-                    </div>
-                    <h2 className="text-lg font-bold text-slate-900 font-display">
-                      Unified Developer API & Webhooks
-                    </h2>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Ingest call transcripts and conference metadata programmatically into the Spark platform from external applications.
-                  </p>
-                </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Column 1: API Keys Manager */}
-                  <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200 flex flex-col justify-between">
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                          <Key className="w-4 h-4 text-cyan-500" />
-                          <span>Active API Keys</span>
-                        </span>
-                        <span className="text-[10px] font-mono bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-bold">
-                          SECURE
-                        </span>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        {apiKeys.map((key, index) => (
-                          <div key={index} className="flex items-center justify-between bg-white border border-slate-200 rounded-xl p-2.5 shadow-2xs">
-                            <span className="font-mono text-[11px] text-slate-600 truncate max-w-[150px]">
-                              {key}
-                            </span>
-                            <button
-                              onClick={() => handleCopyKey(key)}
-                              className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
-                              title="Copy key"
-                            >
-                              {copiedKey === key ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-500" />
-                              ) : (
-                                <Copy className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="pt-4 mt-4 border-t border-slate-200">
-                      <button
-                        onClick={handleGenerateApiKey}
-                        className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs py-2 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Generate Live API Key</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Column 2: Code Payload Documentation */}
-                  <div className="bg-slate-900 text-slate-100 rounded-2xl p-5 border border-slate-800 flex flex-col lg:col-span-2">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-800 gap-3">
-                      <div className="flex items-center gap-2">
-                        <Code className="w-4 h-4 text-emerald-400" />
-                        <span className="text-xs font-bold text-slate-200">Endpoint API Payload Schema</span>
-                      </div>
-
-                      <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800 gap-1 text-[10px] font-mono">
-                        {(["zoom", "gong", "google", "microsoft"] as const).map((tab) => (
-                          <button
-                            key={tab}
-                            onClick={() => setActiveCodeTab(tab)}
-                            className={`px-2.5 py-1 rounded-md cursor-pointer transition-all ${
-                              activeCodeTab === tab 
-                                ? "bg-slate-850 text-emerald-400 font-bold" 
-                                : "text-slate-400 hover:text-slate-200"
-                            }`}
-                          >
-                            {tab.toUpperCase()}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex-1 mt-3 relative">
-                      <div className="absolute right-2 top-2 z-10">
-                        <button
-                          onClick={() => handleCopyPayloadText(getPayloadCode(activeCodeTab))}
-                          className="bg-slate-950/80 hover:bg-slate-950 border border-slate-800 text-slate-300 p-1.5 rounded-lg cursor-pointer flex items-center gap-1.5 transition-all text-[10px]"
-                        >
-                          {copiedPayload ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-500" />
-                              <span>Copied</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Copy JSON</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                      <pre className="font-mono text-[11px] text-emerald-300 bg-slate-950 p-4 rounded-xl overflow-x-auto max-h-[170px] border border-slate-800/60 leading-relaxed scrollbar-thin">
-                        <code>{getPayloadCode(activeCodeTab)}</code>
-                      </pre>
-                    </div>
-
-                    <div className="mt-3 text-[10px] text-slate-400 flex items-center justify-between">
-                      <div className="flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        <span className="font-mono text-[9px]">POST /api/v1/conference-ingest</span>
-                      </div>
-                      <span className="italic">Supports auto-running Milton Persuasion NLP</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Ingest Sandbox Simulator */}
-                <div className="bg-slate-50 border border-slate-200 rounded-3xl p-6 shadow-xs space-y-6">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200 pb-4 gap-4">
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                        <Terminal className="w-4.5 h-4.5 text-blue-500" />
-                        <span>Interactive Developer Sandbox Terminal</span>
-                      </h3>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        Test and simulate incoming third-party webhook streams. Ingested payloads are processed using live AI models and written directly to your Firestore database.
-                      </p>
-                    </div>
-
-                    <div className="flex bg-white p-1 rounded-xl border border-slate-200 shadow-2xs gap-1 text-[11px]">
-                      {(["zoom", "gong", "google", "microsoft"] as const).map((plat) => (
-                        <button
-                          key={plat}
-                          onClick={() => handleSandboxPlatformChange(plat)}
-                          className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                            sandboxPlatform === plat 
-                              ? "bg-blue-50 text-blue-700 border border-blue-200" 
-                              : "text-slate-600 hover:bg-slate-50"
-                          }`}
-                        >
-                          {plat.toUpperCase()}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {/* Sandbox Fields */}
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">
-                            API Target Ingest URL
-                          </label>
-                          <input
-                            type="text"
-                            readOnly
-                            value={window.location.origin + "/api/v1/conference-ingest"}
-                            className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-600 font-mono focus:outline-none"
-                          />
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">
-                            Auth API Secret Key
-                          </label>
-                          <select
-                            value={sandboxApiKey}
-                            onChange={(e) => setSandboxApiKey(e.target.value)}
-                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 font-mono focus:outline-none"
-                          >
-                            {apiKeys.map((k) => (
-                              <option key={k} value={k}>{k}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">
-                            Meeting Title
-                          </label>
-                          <input
-                            type="text"
-                            value={sandboxTitle}
-                            onChange={(e) => setSandboxTitle(e.target.value)}
-                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          />
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">
-                            Corporate Account
-                          </label>
-                          <input
-                            type="text"
-                            value={sandboxCustomer}
-                            onChange={(e) => setSandboxCustomer(e.target.value)}
-                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          />
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">
-                            Sales Representative
-                          </label>
-                          <input
-                            type="text"
-                            value={sandboxRep}
-                            onChange={(e) => setSandboxRep(e.target.value)}
-                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center">
-                          <label className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">
-                            Transcript Text (Milton Model Persuasion Script)
-                          </label>
-                          <span className="text-[9px] font-mono text-cyan-600 bg-cyan-50 px-1.5 py-0.5 rounded border border-cyan-100">
-                            Live NLP Persuasion Input
-                          </span>
-                        </div>
-                        <textarea
-                          rows={4}
-                          value={sandboxTranscript}
-                          onChange={(e) => setSandboxTranscript(e.target.value)}
-                          className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-700 font-sans focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none leading-relaxed"
-                          placeholder="Representative: Welcome..."
-                        />
-                      </div>
-
-                      <button
-                        onClick={handleTriggerSandboxIngest}
-                        disabled={sandboxLoading}
-                        className={`w-full py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer ${
-                          sandboxLoading 
-                            ? "bg-slate-300 text-slate-500 cursor-not-allowed" 
-                            : "bg-blue-600 hover:bg-blue-700 text-white"
-                        }`}
-                      >
-                        {sandboxLoading ? (
-                          <>
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                            <span>Calling API Endpoint & Running Milton NLP...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play className="w-4 h-4" />
-                            <span>Trigger Secure API Ingest Request</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-
-                    {/* Simulator Sandbox Response Window */}
-                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between text-slate-200 min-h-[300px]">
-                      <div className="space-y-3">
-                        <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-                          <div className="flex items-center gap-2">
-                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                            <span className="text-xs font-bold font-mono">SANDBOX RESPONSE CONSOLE</span>
-                          </div>
-                          {sandboxSuccess && (
-                            <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full uppercase font-bold">
-                              HTTP 201 Created
-                            </span>
-                          )}
-                          {sandboxError && (
-                            <span className="text-[10px] font-mono bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded-full uppercase font-bold">
-                              HTTP Error
-                            </span>
-                          )}
-                          {!sandboxSuccess && !sandboxError && (
-                            <span className="text-[10px] font-mono text-slate-500 italic">
-                              Awaiting Trigger...
-                            </span>
-                          )}
-                        </div>
-
-                        {sandboxResponse && (
-                          <div className="space-y-3">
-                            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-xs text-emerald-300">
-                              <span className="font-bold block">🚀 Call Session Ingested & Persisted!</span>
-                              <span className="text-[10.5px] block mt-1 leading-relaxed">
-                                The call transcript has been verified, standard multi-tenant partitions resolved to <strong>{sandboxCustomer} ({sandboxPlatform.toUpperCase()})</strong>, and live Milton NLP analytics completed with a closing probability of <strong>{sandboxResponse.session?.analytics?.successPercentage || 0}%</strong>.
-                              </span>
-                            </div>
-
-                            <pre className="font-mono text-[10px] text-emerald-400 bg-slate-950 p-3 rounded-xl overflow-auto max-h-[160px] border border-slate-800 leading-normal scrollbar-thin">
-                              <code>{JSON.stringify(sandboxResponse, null, 2)}</code>
-                            </pre>
-                          </div>
-                        )}
-
-                        {sandboxError && (
-                          <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-4 text-xs text-rose-300">
-                            <span className="font-bold block">⚠️ Ingestion Rejected</span>
-                            <span className="text-[10px] block mt-1 leading-relaxed">
-                              {sandboxError}
-                            </span>
-                          </div>
-                        )}
-
-                        {!sandboxResponse && !sandboxError && (
-                          <div className="h-[220px] flex flex-col items-center justify-center text-center space-y-2">
-                            <Terminal className="w-10 h-10 text-slate-700" />
-                            <div>
-                              <p className="text-xs text-slate-400 font-bold">Terminal Inactive</p>
-                              <p className="text-[10px] text-slate-500 max-w-[250px] mx-auto mt-0.5">
-                                Set custom parameters in the left simulator form and trigger a payload to view direct JSON stream.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {sandboxSuccess && (
-                        <div className="pt-3 mt-3 border-t border-slate-800 text-center">
-                          <button
-                            onClick={() => window.location.reload()}
-                            className="inline-flex items-center gap-1.5 text-[10px] font-bold text-blue-400 hover:text-blue-300 font-mono transition-all uppercase"
-                          >
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin-slow" />
-                            <span>Click to Sync Dashboard Data (Refresh Page)</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
           )}
 
@@ -1978,7 +1735,7 @@ export default function CustomerPortal({
                     <div>
                       <p className="text-xs font-bold text-emerald-800">Authorized: Full Workspace Administrator</p>
                       <p className="text-[11px] text-emerald-600 leading-normal mt-0.5">
-                        You are logged in as <strong>{currentActiveMember.name}</strong>. Because your Authorized Access level is <strong>"Administrator"</strong>, you are fully authorized to invite new members and remove existing team members from this portal.
+                        You are logged in as <strong>{currentActiveMember?.name || "Representative"}</strong>. Because your Authorized Access level is <strong>"Administrator"</strong>, you are fully authorized to invite new members and remove existing team members from this portal.
                       </p>
                     </div>
                   </motion.div>
@@ -1994,7 +1751,7 @@ export default function CustomerPortal({
                     <div>
                       <p className="text-xs font-bold text-amber-800">Restricted Access Mode: Read-Only</p>
                       <p className="text-[11px] text-amber-600 leading-normal mt-0.5">
-                        You are logged in as <strong>{currentActiveMember.name}</strong> (Authorized Access: <em>{currentActiveMember.authorizedAccess}</em>). Only members with Authorized Access level of <strong>"Administrator"</strong> are allowed to invite new users or delete team members. To test admin capabilities, select Phil Muffins in the simulator switcher.
+                        You are logged in as <strong>{currentActiveMember?.name || "Representative"}</strong> (Authorized Access: <em>{currentActiveMember?.authorizedAccess || "User"}</em>). Only members with Authorized Access level of <strong>"Administrator"</strong> are allowed to invite new users or delete team members. To test admin capabilities, select Phil Muffins in the simulator switcher.
                       </p>
                     </div>
                   </motion.div>
@@ -2040,19 +1797,32 @@ export default function CustomerPortal({
                           <tr key={member.id} className="hover:bg-slate-50/50 transition-colors">
                             <td className="py-3.5 px-4">
                               <div className="flex items-center gap-2.5">
-                                <div className="w-7 h-7 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-slate-700 font-mono text-[10px]">
-                                  {member.name.split(" ").map(n => n[0]).join("")}
-                                </div>
+                                  <div className="w-7 h-7 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-slate-700 font-mono text-[10px]">
+                                    {(member?.name || "Member").split(" ").map(n => n[0]).join("")}
+                                  </div>
                                 <div>
                                   <span className="font-bold text-slate-950 block">{member.name}</span>
+                                  {member.sparkId && (
+                                    <span className="text-[10px] text-teal-600 font-mono block">Spark ID: {member.sparkId}</span>
+                                  )}
                                   {member.id === activeMemberId && (
                                     <span className="text-[9px] text-blue-600 font-semibold block">Acting Persona</span>
+                                  )}
+                                  {member.status === "Invited" && member.enrollmentToken && (
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                      <span className="text-[9.5px] text-amber-600 bg-amber-50/80 px-1.5 py-0.5 rounded border border-amber-100/50 font-mono font-bold">
+                                        Temp Pass: {member.tempPassword || "N/A"}
+                                      </span>
+                                    </div>
                                   )}
                                 </div>
                               </div>
                             </td>
                             <td className="py-3.5 px-4 text-slate-500 font-mono text-[11px]">
-                              {member.email}
+                              <span>{member.email}</span>
+                              {member.tenantId && (
+                                <span className="text-[10px] text-indigo-600 font-mono block">Tenant ID: {member.tenantId}</span>
+                              )}
                             </td>
                             <td className="py-3.5 px-4 text-slate-600 font-medium">
                               {member.role}
@@ -2067,34 +1837,58 @@ export default function CustomerPortal({
                               </span>
                             </td>
                             <td className="py-3.5 px-4">
-                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold font-mono ${
-                                member.status === "Active"
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
-                                  : "bg-slate-100 text-slate-500 border border-slate-200"
-                              }`}>
-                                {member.status}
-                              </span>
+                              <div className="space-y-0.5">
+                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold font-mono inline-block ${
+                                  member.status === "Active"
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                                    : member.status === "Invited"
+                                    ? "bg-amber-50 text-amber-700 border border-amber-100"
+                                    : "bg-slate-100 text-slate-500 border border-slate-200"
+                                }`}>
+                                  {member.status}
+                                </span>
+                                {member.activationDate && (
+                                  <span className="text-[10px] text-slate-400 block">Activated: {member.activationDate}</span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-3.5 px-4 text-right">
-                              {isCurrentUserAdmin ? (
-                                <button
-                                  onClick={() => handleDeleteMember(member.id)}
-                                  disabled={member.id === activeMemberId}
-                                  className={`p-1.5 rounded-lg border text-rose-600 transition-colors cursor-pointer ${
-                                    member.id === activeMemberId
-                                      ? "opacity-30 cursor-not-allowed border-slate-100 text-slate-400"
-                                      : "border-rose-100 bg-rose-50 hover:bg-rose-100 hover:text-rose-700"
-                                  }`}
-                                  title={member.id === activeMemberId ? "Cannot delete yourself" : "Remove team member"}
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              ) : (
-                                <span className="text-slate-300 flex items-center justify-end gap-1 text-[10px] font-medium" title="Administrator role required to delete members">
-                                  <Lock className="w-3 h-3 text-slate-400" />
-                                  <span className="text-slate-400">Locked</span>
-                                </span>
-                              )}
+                              <div className="flex items-center justify-end gap-1.5">
+                                {member.status === "Invited" && member.enrollmentToken && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const enrollmentUrl = `${window.location.origin}/enroll?token=${member.enrollmentToken}&email=${encodeURIComponent(member.email)}`;
+                                      navigator.clipboard.writeText(enrollmentUrl);
+                                      setTeamSuccess(`Copied Enrollment URL for ${member.name}!`);
+                                      setTimeout(() => setTeamSuccess(null), 4000);
+                                    }}
+                                    className="p-1.5 rounded-lg border border-blue-100 bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 transition-colors cursor-pointer"
+                                    title="Copy Enrollment Link"
+                                  >
+                                    <Copy className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                {isCurrentUserAdmin ? (
+                                  <button
+                                    onClick={() => handleDeleteMember(member.id)}
+                                    disabled={member.id === activeMemberId}
+                                    className={`p-1.5 rounded-lg border text-rose-600 transition-colors cursor-pointer ${
+                                      member.id === activeMemberId
+                                        ? "opacity-30 cursor-not-allowed border-slate-100 text-slate-400"
+                                        : "border-rose-100 bg-rose-50 hover:bg-rose-100 hover:text-rose-700"
+                                    }`}
+                                    title={member.id === activeMemberId ? "Cannot delete yourself" : "Remove team member"}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-300 flex items-center justify-end gap-1 text-[10px] font-medium" title="Administrator role required to delete members">
+                                    <Lock className="w-3 h-3 text-slate-400" />
+                                    <span className="text-slate-400">Locked</span>
+                                  </span>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -2118,62 +1912,142 @@ export default function CustomerPortal({
                       </div>
 
                       <form onSubmit={handleAddMember} className="space-y-4 text-xs">
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                          {/* Member Name */}
-                          <div className="space-y-1">
-                            <label className="font-semibold text-slate-600 block">Full Name</label>
-                            <input
-                              type="text"
-                              value={newMemberName}
-                              onChange={(e) => setNewMemberName(e.target.value)}
-                              disabled={!isCurrentUserAdmin}
-                              placeholder="e.g. John Doe"
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
-                            />
-                          </div>
+                        {(() => {
+                          const isNewMemberEmailMismatch = newMemberEmail.trim() !== "" && newMemberEmailConfirm.trim() !== "" && newMemberEmail.trim().toLowerCase() !== newMemberEmailConfirm.trim().toLowerCase();
+                          return (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                              {/* Member Name */}
+                              <div className="space-y-1">
+                                <label className="font-semibold text-slate-600 block">Full Name</label>
+                                <input
+                                  type="text"
+                                  value={newMemberName}
+                                  onChange={(e) => setNewMemberName(e.target.value)}
+                                  disabled={!isCurrentUserAdmin}
+                                  placeholder="e.g. John Doe"
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                                />
+                              </div>
 
-                          {/* Email Address */}
-                          <div className="space-y-1">
-                            <label className="font-semibold text-slate-600 block">Email Address</label>
-                            <input
-                              type="email"
-                              value={newMemberEmail}
-                              onChange={(e) => setNewMemberEmail(e.target.value)}
-                              disabled={!isCurrentUserAdmin}
-                              placeholder="e.g. john.doe@arachnid.com"
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
-                            />
-                          </div>
+                              {/* Email Address */}
+                              <div className="space-y-1">
+                                <label className={`font-semibold block ${isNewMemberEmailMismatch ? "text-rose-600" : "text-slate-600"}`}>Email Address</label>
+                                <input
+                                  type="email"
+                                  value={newMemberEmail}
+                                  onChange={(e) => setNewMemberEmail(e.target.value)}
+                                  disabled={!isCurrentUserAdmin}
+                                  placeholder="e.g. john.doe@arachnid.com"
+                                  className={`w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 font-medium transition-colors ${
+                                    isNewMemberEmailMismatch
+                                      ? "bg-rose-50 border-rose-400 text-rose-900 focus:ring-rose-500"
+                                      : "bg-slate-50 border-slate-200 focus:ring-blue-500 text-slate-900"
+                                  }`}
+                                />
+                                {isNewMemberEmailMismatch && (
+                                  <span className="text-[10px] text-rose-600 block mt-1 font-medium">
+                                    ⚠️ spelling mismatch!
+                                  </span>
+                                )}
+                              </div>
 
-                          {/* Member Role */}
-                          <div className="space-y-1">
-                            <label className="font-semibold text-slate-600 block">Workspace Role</label>
-                            <input
-                              type="text"
-                              value={newMemberRole}
-                              onChange={(e) => setNewMemberRole(e.target.value)}
-                              disabled={!isCurrentUserAdmin}
-                              placeholder="e.g. Sales Specialist"
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
-                            />
-                          </div>
+                              {/* Confirm Email Address */}
+                              <div className="space-y-1">
+                                <label className={`font-semibold block ${isNewMemberEmailMismatch ? "text-rose-600" : "text-slate-600"}`}>Confirm Email Address</label>
+                                <input
+                                  type="email"
+                                  value={newMemberEmailConfirm}
+                                  onChange={(e) => setNewMemberEmailConfirm(e.target.value)}
+                                  disabled={!isCurrentUserAdmin}
+                                  placeholder="Verify spelling of email"
+                                  className={`w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 font-medium transition-colors ${
+                                    isNewMemberEmailMismatch
+                                      ? "bg-rose-50 border-rose-400 text-rose-900 focus:ring-rose-500"
+                                      : "bg-slate-50 border-slate-200 focus:ring-blue-500 text-slate-900"
+                                  }`}
+                                />
+                                {isNewMemberEmailMismatch && (
+                                  <span className="text-[10px] text-rose-600 block mt-1 font-medium">
+                                    ⚠️ spelling mismatch!
+                                  </span>
+                                )}
+                              </div>
 
-                          {/* Authorized Access level */}
-                          <div className="space-y-1">
-                            <label className="font-semibold text-slate-600 block">Authorized Access Level</label>
-                            <select
-                              value={newMemberAccess}
-                              onChange={(e) => setNewMemberAccess(e.target.value)}
-                              disabled={!isCurrentUserAdmin}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
-                            >
-                              <option value="Administrator">Administrator (Can Invite & Delete)</option>
-                              <option value="Manager">Manager (Read-Only access)</option>
-                              <option value="User">User (Rep Performance Metrics Only)</option>
-                              <option value="Brand Marketing Suite">Brand Marketing Suite</option>
-                              <option value="Livestock Accounts">Livestock Accounts</option>
-                              <option value="Equine Brands">Equine Brands</option>
-                            </select>
+                              {/* Member Role */}
+                              <div className="space-y-1">
+                                <label className="font-semibold text-slate-600 block">Workspace Role</label>
+                                <input
+                                  type="text"
+                                  value={newMemberRole}
+                                  onChange={(e) => setNewMemberRole(e.target.value)}
+                                  disabled={!isCurrentUserAdmin}
+                                  placeholder="e.g. Sales Specialist"
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                                />
+                              </div>
+
+                              {/* Authorized Access level */}
+                              <div className="space-y-1">
+                                <label className="font-semibold text-slate-600 block">Authorized Access Level</label>
+                                <select
+                                  value={newMemberAccess}
+                                  onChange={(e) => setNewMemberAccess(e.target.value)}
+                                  disabled={!isCurrentUserAdmin}
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                                >
+                                  <option value="Administrator">Administrator (Can Invite & Delete)</option>
+                                  <option value="Manager">Manager (Read-Only access)</option>
+                                  <option value="User">User (Rep Interface Only)</option>
+                                  <option value="Brand Marketing Suite">Brand Marketing Suite</option>
+                                  <option value="Livestock Accounts">Livestock Accounts</option>
+                                  <option value="Equine Brands">Equine Brands</option>
+                                </select>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Identity & Access Metadata */}
+                        <div className="border-t border-slate-100 pt-3 space-y-2">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Identity & Access Metadata</span>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {/* Spark ID */}
+                            <div className="space-y-1">
+                              <label className="font-semibold text-slate-600 block">Spark ID (Optional)</label>
+                              <input
+                                type="text"
+                                value={newMemberSparkId}
+                                onChange={(e) => setNewMemberSparkId(e.target.value)}
+                                disabled={!isCurrentUserAdmin}
+                                placeholder="e.g. SPK-94285 (Auto-generated if empty)"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                              />
+                            </div>
+
+                            {/* Tenant ID */}
+                            <div className="space-y-1">
+                              <label className="font-semibold text-slate-600 block">Tenant ID (Optional)</label>
+                              <input
+                                type="text"
+                                value={newMemberTenantId}
+                                onChange={(e) => setNewMemberTenantId(e.target.value)}
+                                disabled={!isCurrentUserAdmin}
+                                placeholder="e.g. CLIENT-A (Auto-detected if empty)"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                              />
+                            </div>
+
+                            {/* Activation Date */}
+                            <div className="space-y-1">
+                              <label className="font-semibold text-slate-600 block">Date of Account Activation</label>
+                              <input
+                                type="date"
+                                value={newMemberActivationDate}
+                                onChange={(e) => setNewMemberActivationDate(e.target.value)}
+                                disabled={!isCurrentUserAdmin}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                              />
+                            </div>
                           </div>
                         </div>
 
@@ -2184,11 +2058,20 @@ export default function CustomerPortal({
                           </div>
                           <button
                             type="submit"
-                            disabled={!isCurrentUserAdmin}
+                            disabled={!isCurrentUserAdmin || isInviting}
                             className="w-full sm:w-auto sm:px-6 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-xl transition-all shadow-md shadow-blue-500/10 flex items-center justify-center gap-1.5 cursor-pointer disabled:bg-slate-300 disabled:cursor-not-allowed"
                           >
-                            <UserPlus className="w-3.5 h-3.5" />
-                            <span>Invite Member</span>
+                            {isInviting ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Generating Link...</span>
+                              </>
+                            ) : (
+                              <>
+                                <UserPlus className="w-3.5 h-3.5" />
+                                <span>Invite Member</span>
+                              </>
+                            )}
                           </button>
                         </div>
                       </form>
@@ -2321,7 +2204,7 @@ export default function CustomerPortal({
                         />
                         <div>
                           <span className="text-xs font-bold text-slate-800 block">Behavioral Linguistics Analytics</span>
-                          <span className="text-[10px] text-slate-500 block">Persuasion mapping, anxiety diagnostics, Milton patterns tracker (+$10/user)</span>
+                          <span className="text-[10px] text-slate-500 block">Persuasion mapping, anxiety diagnostics, dialogue patterns tracker (+$10/user)</span>
                         </div>
                       </label>
                     </div>
@@ -2955,7 +2838,7 @@ export default function CustomerPortal({
                         Spark Dialogue Analytics wants to access your {oauthPlatform === 'zoom' ? 'Zoom' : 'Google'} Account
                       </h4>
                       <p className="text-[11px] text-slate-500 max-w-md mx-auto leading-relaxed">
-                        Authorize Spark to securely pull transcript payloads and conference call recordings to enable automatic Milton Persuasion NLP.
+                        Authorize Spark to securely pull transcript payloads and conference call recordings to enable automatic dialogue persuasion analysis.
                       </p>
                     </div>
 

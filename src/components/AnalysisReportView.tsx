@@ -8,7 +8,7 @@ interface AnalysisReportViewProps {
 }
 
 export default function AnalysisReportView({ session, onClose }: AnalysisReportViewProps) {
-  const isLuciaSession = session.customerName.toLowerCase().includes("ray chang") || session.title.toLowerCase().includes("lucia");
+  const isLuciaSession = (session?.customerName || "").toLowerCase().includes("ray chang") || (session?.title || "").toLowerCase().includes("lucia");
 
   const handlePrint = () => {
     window.print();
@@ -42,7 +42,7 @@ export default function AnalysisReportView({ session, onClose }: AnalysisReportV
     },
     {
       code: "D5",
-      name: "NLP / Milton Model Language",
+      name: "Advanced Dialogue Language",
       status: "Strong",
       finding: "Genuine, unforced rapport (shared alma mater, product show-and-tell, humor) that matched Ray's own energy and technical vocabulary."
     },
@@ -119,7 +119,7 @@ export default function AnalysisReportView({ session, onClose }: AnalysisReportV
       },
       {
         code: "D5",
-        name: "NLP / Milton Model Language",
+        name: "Advanced Dialogue Language",
         status: s.analytics?.miltonPatterns && s.analytics.miltonPatterns.length >= 3 ? "Strong" : "Developing",
         finding: s.analytics?.miltonPatterns && s.analytics.miltonPatterns.length >= 3
           ? `Expert pacing, presuppositions, and double-bind structures noted throughout the core pitch.`
@@ -266,7 +266,7 @@ export default function AnalysisReportView({ session, onClose }: AnalysisReportV
               <FileText className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold tracking-wider font-mono uppercase text-teal-400">Executive Print Report</h3>
+              <h3 className="text-sm font-bold tracking-wider font-mono uppercase text-teal-400">Transcript Analysis Report</h3>
               <p className="text-xs text-slate-400">High-fidelity structured multi-page PDF rendering optimized for physical printing</p>
             </div>
           </div>
@@ -310,7 +310,7 @@ export default function AnalysisReportView({ session, onClose }: AnalysisReportV
                     {isLuciaSession ? (
                       <>Lucia Formica (Illumine VP, Customer Success) × <br/> Avonlea — Personal Zapper Business Unit</>
                     ) : (
-                      <>{session.repName} (Representative) × <br/> {session.customerName} (Client)</>
+                      <>Presenter: {session.repName || "No Presenter Detected"}</>
                     )}
                   </h1>
                   <h2 className="text-sm font-semibold text-teal-700 tracking-tight leading-relaxed">
@@ -606,7 +606,7 @@ export default function AnalysisReportView({ session, onClose }: AnalysisReportV
                 </div>
 
                 <h2 className="text-sm font-bold tracking-wider font-mono uppercase text-slate-900 border-b-2 border-slate-200 pb-1.5 mb-4">
-                  NLP / MILTON MODEL LANGUAGE AUDIT
+                  ADVANCED DIALOGUE LANGUAGE AUDIT
                 </h2>
                 <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
                   <p>
@@ -978,7 +978,7 @@ export default function AnalysisReportView({ session, onClose }: AnalysisReportV
                         <td className="p-3 text-center font-bold text-red-700 bg-red-50/20">{scores.d4}/10</td>
                       </tr>
                       <tr>
-                        <td className="p-3 font-sans font-medium">D5 — NLP / Milton Model Language</td>
+                        <td className="p-3 font-sans font-medium">D5 — Advanced Dialogue Language</td>
                         <td className="p-3 text-center font-bold text-green-700 bg-green-50/20">{scores.d5}/10</td>
                       </tr>
                       <tr>
@@ -1010,11 +1010,11 @@ export default function AnalysisReportView({ session, onClose }: AnalysisReportV
                 </div>
 
                 <h2 className="text-sm font-bold tracking-wider font-mono uppercase text-slate-900 border-b-2 border-slate-200 pb-1.5 mb-4">
-                  BUYER COMMUNICATION PROFILE — {isLuciaSession ? "RAY CHANG" : session.customerName.toUpperCase()}
+                  BUYER COMMUNICATION PROFILE — {isLuciaSession ? "RAY CHANG" : (session.customerName ? session.customerName.toUpperCase() : "CLIENT")}
                 </h2>
                 <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
                   <p>
-                    <strong>A. Identity:</strong> {isLuciaSession ? "Ray Chang, Senior Product Manager, Personal Zapper business unit, Avonlea. Champion / highly collaborative buyer." : `${session.customerName}. Primary economic influencer and division project lead.`}
+                    <strong>A. Identity:</strong> {isLuciaSession ? "Ray Chang, Senior Product Manager, Personal Zapper business unit, Avonlea. Champion / highly collaborative buyer." : (session.customerName ? `${session.customerName}. Primary economic influencer and division project lead.` : "Primary economic influencer and division project lead.")}
                   </p>
                   <p>
                     <strong>B. Information Processing:</strong> Highly detail-oriented and story-driven. Explains needs and worries through concrete divisional use-cases (e.g. SKU issues, testing schedules) rather than conceptual frameworks. Relates product utility directly to daily tasks.

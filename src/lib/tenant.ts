@@ -69,3 +69,13 @@ export function getTenantNameForCustomer(customerName: string): string {
   
   return customerName.replace(/\s*\(.*\)\s*/g, "").trim() + " Enterprise";
 }
+
+export function getTenantNameById(tenantId?: string): string {
+  if (!tenantId) return "Representative Workspace";
+  if (tenantId === "Tenant_ID_101") return "Arachnid Systems";
+  if (tenantId === "Tenant_ID_102") return "Muffin & Sons Brands";
+  if (tenantId === "Tenant_ID_103") return "Equine Digital Group";
+  if (tenantId === "Tenant_ID_104") return "SnailCare Logistics";
+  return "Representative Workspace";
+}
+
