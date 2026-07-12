@@ -1,0 +1,8 @@
+Representative (Dave): Hi Robert, thank you for jumping on today's call. As we start looking at your company's analytics, you can begin to feel a sense of clarity about where your sales team is excelling.
+Customer (Robert): Well, we've had a lot of trouble with conversational consistency lately. Representative training is highly inconsistent, and that's why I wanted to take this meeting.
+Representative (Dave): Absolutely, consistency is the foundation of high-performing teams. And since you are looking to build a unified sales playbook that eliminates conversational guessing, you're already noticing how much simpler training becomes when every representative has access to live NLP coaching.
+Customer (Robert): Exactly. But our budget is already fully committed for this quarter. I can't justify a new platform spend right now.
+Representative (Dave): That makes perfect sense. Budget stewardship is vital. Is it worth exploring how our deferred implementation program operates, which allows you to onboard your team today while postponing all billing until next quarter?
+Customer (Robert): Postponed billing? How does that work?
+Representative (Dave): It is quite straightforward. We restructure the contract terms to synchronize with your upcoming fiscal cycle. Since you want to start reclaiming 15 hours of coaching time per week as soon as possible, would you prefer the onboarding kickoff on Tuesday morning, or is Thursday afternoon better aligned with your team's schedule?
+Customer (Robert): A deferred billing model could actually work for us. Let's look into that. Tuesday morning is perfect, let's schedule the kickoff.
