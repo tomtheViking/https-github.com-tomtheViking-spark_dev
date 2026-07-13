@@ -17,8 +17,10 @@ const compiledServerPath = join(projectDir, 'dist', 'server.cjs');
 const port = process.env.PORT || 8080;
 
 let useFallback = false;
+let buildError = null;
 
-console.log('🚀 Starting Spark Platform...');
+console.log('=== STARTING SPARK PLATFORM ===');
+console.log('Node version:', process.version);
 console.log('Port:', port);
 console.log('Environment:', process.env.NODE_ENV || 'development');
 
@@ -29,15 +31,13 @@ if (!existsSync(compiledServerPath)) {
     console.log('✅ Build completed successfully.');
   } catch (error) {
     console.error('⚠️ Failed to run build process during start:', error.message);
+    buildError = error.message;
     console.log('ℹ️ Activating fallback health/status server to prevent Beanstalk deployment failure.');
     useFallback = true;
   }
 }
 
-if (!useFallback && existsSync(compiledServerPath)) {
-  console.log('🚀 Starting high-performance Spark Platform from compiled bundle...');
-  require('./dist/server.cjs');
-} else {
+function startFallbackServer(loadError) {
   console.log('Starting Spark Platform server in fallback status mode...');
   
   const express = require('express');
@@ -54,7 +54,9 @@ if (!useFallback && existsSync(compiledServerPath)) {
       status: 'healthy', 
       timestamp: new Date().toISOString(),
       port: port,
-      mode: 'fallback'
+      mode: 'fallback',
+      buildError: buildError,
+      loadError: loadError ? loadError.message || String(loadError) : null
     });
   });
 
@@ -62,10 +64,12 @@ if (!useFallback && existsSync(compiledServerPath)) {
   app.get('/', (req, res) => {
     console.log('Main route requested');
     res.json({ 
-      message: 'Spark Platform is running!',
+      message: 'Spark Platform is running in fallback mode!',
       version: '1.0.0',
       port: port,
-      mode: 'fallback'
+      mode: 'fallback',
+      buildError: buildError,
+      loadError: loadError ? loadError.message || String(loadError) : null
     });
   });
 
@@ -74,6 +78,19 @@ if (!useFallback && existsSync(compiledServerPath)) {
     console.log(`✅ Spark Platform fallback server started on port ${port}`);
     console.log(`🌐 Server listening on all interfaces (0.0.0.0:${port})`);
   });
+}
+
+if (!useFallback && existsSync(compiledServerPath)) {
+  console.log('🚀 Starting high-performance Spark Platform from compiled bundle...');
+  try {
+    require('./dist/server.cjs');
+  } catch (error) {
+    console.error('❌ Failed to run compiled server bundle:', error);
+    console.log('ℹ️ Activating fallback health/status server due to runtime error.');
+    startFallbackServer(error);
+  }
+} else {
+  startFallbackServer(null);
 }
 
 
