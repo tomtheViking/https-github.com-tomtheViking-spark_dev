@@ -177,9 +177,9 @@ To ensure seamless deployment on AWS Elastic Beanstalk, the codebase includes na
 ### 7.1 The Procfile Orchestrator
 We have added a `Procfile` in the project root:
 ```yaml
-web: npm run build && npm start
+web: npm start
 ```
-This tells AWS Elastic Beanstalk to build the React client-side assets and compile the Express server into `dist/server.cjs` immediately before starting the Node server.
+This tells AWS Elastic Beanstalk to start the Node server via our custom entry point. Since our `server.js` contains a self-healing build process, it will automatically compile the TypeScript assets during the first boot if they are not already compiled!
 
 ### 7.2 Self-Healing Server Entrypoint (`server.js`)
 AWS Elastic Beanstalk looks for a root-level `server.js` to run your web server. Since our codebase is authored in modern TypeScript (`server.ts`), we have configured a smart entrypoint `server.js` which:
