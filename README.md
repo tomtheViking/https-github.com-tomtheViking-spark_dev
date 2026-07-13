@@ -48,7 +48,7 @@ sudo apt-get install -y nodejs
    ```bash
    npm run build
    ```
-   This will bundle the frontend assets and compile the Express server into `dist/server.cjs`.
+   This will bundle the frontend assets and compile the Express server into `dist/server.cjs`. The project includes a root-level `server.js` wrapper that acts as the entrypoint for PM2 and other production platforms, automatically loading the compiled server.
 
 ---
 
@@ -63,7 +63,7 @@ To ensure the server runs continuously and restarts automatically if the system 
 
 2. **Start the application:**
    ```bash
-   pm2 start dist/server.cjs --name spark-analytic
+   pm2 start server.js --name spark-analytic
    ```
 
 3. **Configure PM2 to start on boot:**
@@ -108,3 +108,63 @@ npm install
 npm run build
 pm2 restart spark-analytic
 ```
+
+---
+
+## 6. Forward-Facing Integrations & Ingestion API
+
+The Spark Platform includes a native, forward-facing REST API designed to ingest call transcripts from major video conferencing and conversation intelligence platforms (Zoom, Gong, Google Meet, and MS Teams). Once ingested, transcripts are automatically processed through the **Gemini NLP Milton Model Practitioner Engine** and saved to the Firestore cloud database.
+
+### 6.1 Conference Ingest Endpoint
+
+- **Endpoint**: `POST /api/v1/conference-ingest`
+- **Content-Type**: `application/json`
+
+#### Request Payload Schema
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `apiKey` | `string` | **Yes** | Your Spark developer API key. Must start with `spark_live_`. |
+| `platform` | `string` | **Yes** | The source platform. Allowed values: `"zoom"`, `"gong"`, `"google"`, `"microsoft"`. |
+| `transcriptText` | `string` | **Yes** | The raw speech-to-text transcript of the sales interaction. |
+| `meetingId` | `string` | No | Unique identifier from the source platform. Auto-generated if omitted. |
+| `title` | `string` | No | Human-readable title of the meeting. |
+| `customerName` | `string` | No | Client company or customer name (used for automated multi-tenant routing). |
+| `repName` | `string` | No | The name of your sales representative. |
+
+#### Example curl Request
+```bash
+curl -X POST https://app.sparkanalytic.com/api/v1/conference-ingest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "apiKey": "spark_live_f8b44ece36e877f8",
+    "platform": "zoom",
+    "meetingId": "zoom_89432890122",
+    "title": "Arachnid Q3 Renewal Discussion",
+    "customerName": "Arachnid Systems",
+    "repName": "Mark Mercer",
+    "transcriptText": "Mark Mercer: Thanks for jumping on. Will we integrate next week or the week after? Customer: Well, I think next week is better. I know you want to protect your team'\''s budget, but manual entry is killing us."
+  }'
+```
+
+#### NLP Processing & Guardrails
+When a transcript is submitted, the API triggers a server-side Gemini 3.5 Flash run with the Spark Conversational Practitioner prompt. This pipeline:
+1. **Linguistic Milton Model Extraction**: Identifies presuppositions, mind-reading, lost performatives, and cause-effect triggers.
+2. **Behavioral Scoring**: Evaluates closing likelihood (`successPercentage`), speaking ratio, and sentiment.
+3. **PII Masking (Guardrail 11)**: Scans and replaces unmasked credit cards, routing numbers, and health statements with `[REDACTED_PII]` before saving.
+4. **Coaching Interventions**: Extracts weak moments and generates corrected wordings based on NLP persuasion frameworks.
+
+---
+
+### 6.2 Platform OAuth & Handshake Endpoints
+
+To support secure app-to-app integrations (e.g., authorizing a Zoom app or Google Workspace Marketplace app to push transcripts automatically), Spark exposes two standard OAuth handshake endpoints:
+
+#### OAuth Callback Redirect Handler
+- **Endpoint**: `GET /api/v1/oauth/callback`
+- **Purpose**: Handshake routing target. Confirms authorization codes and passes state vectors back.
+
+#### OAuth Token Exchange
+- **Endpoint**: `POST /api/v1/oauth/token`
+- **Purpose**: Trades authorization codes for access tokens (`spl_access_token_*`) and returns scopes, expiration intervals, and active user mappings.
+
