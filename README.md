@@ -168,3 +168,24 @@ To support secure app-to-app integrations (e.g., authorizing a Zoom app or Googl
 - **Endpoint**: `POST /api/v1/oauth/token`
 - **Purpose**: Trades authorization codes for access tokens (`spl_access_token_*`) and returns scopes, expiration intervals, and active user mappings.
 
+---
+
+## 7. AWS Elastic Beanstalk Deployment
+
+To ensure seamless deployment on AWS Elastic Beanstalk, the codebase includes native support for automatic builds:
+
+### 7.1 The Procfile Orchestrator
+We have added a `Procfile` in the project root:
+```yaml
+web: npm run build && npm start
+```
+This tells AWS Elastic Beanstalk to build the React client-side assets and compile the Express server into `dist/server.cjs` immediately before starting the Node server.
+
+### 7.2 Self-Healing Server Entrypoint (`server.js`)
+AWS Elastic Beanstalk looks for a root-level `server.js` to run your web server. Since our codebase is authored in modern TypeScript (`server.ts`), we have configured a smart entrypoint `server.js` which:
+1. Dynamically detects if the compiled server (`dist/server.cjs`) is present.
+2. **If missing** (e.g., if a build phase was skipped or interrupted), it automatically triggers `npm run build` synchronously using Node's `child_process.execSync` to generate production assets safely.
+3. Dynamically imports and fires up the fully compiled high-performance production server.
+
+This double-layered setup guarantees that no matter how Elastic Beanstalk boots the app, the assets compile correctly and the server boots up seamlessly on the first attempt!
+
