@@ -15,6 +15,7 @@ const projectDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 const compiledServerPath = join(projectDir, 'dist', 'server.cjs');
 
 const port = process.env.PORT || 8080;
+process.env.PORT = port.toString();
 
 let useFallback = false;
 let buildError = null;
