@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "NODE_OPTIONS=--max-old-space-size=450 vite build && NODE_OPTIONS=--max-old-space-size=450 esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "NODE_OPTIONS=--max-old-space-size=3072 vite build && NODE_OPTIONS=--max-old-space-size=3072 esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "postinstall": "npm run build || true",
     "start": "node server.js",
     "clean": "rm -rf dist server.js",

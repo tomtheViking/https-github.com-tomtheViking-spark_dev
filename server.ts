@@ -780,7 +780,12 @@ function getFallbackVerifyCompliance(transcriptText: string, complianceRules: an
 
 export async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+  let PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+  if (isNaN(PORT) || PORT < 1024) {
+    console.warn(`[Spark Server] Warning: Requested port ${PORT} is privileged (< 1024) or invalid.`);
+    console.warn(`[Spark Server] Automatically overriding to 8080 for AWS Elastic Beanstalk and non-root process security.`);
+    PORT = 8080;
+  }
 
   // Allowed Origins
   const allowedOrigins = [

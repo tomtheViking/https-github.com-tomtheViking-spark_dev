@@ -14,7 +14,16 @@ const { join } = require('path');
 const projectDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 const compiledServerPath = join(projectDir, 'dist', 'server.cjs');
 
-const port = process.env.PORT || 8080;
+let port = process.env.PORT || 8080;
+
+// On AWS Elastic Beanstalk, EC2, or other non-root environments, privileged ports (< 1024)
+// cannot be bound by the webapp/node user. We automatically fallback to the default 8080.
+const numericPort = parseInt(port, 10);
+if (isNaN(numericPort) || numericPort < 1024) {
+  console.warn(`[Spark Production] Warning: Requested port ${port} is privileged (< 1024) or invalid.`);
+  console.warn(`[Spark Production] Automatically overriding to 8080 to comply with Elastic Beanstalk proxy standards.`);
+  port = 8080;
+}
 process.env.PORT = port.toString();
 
 let useFallback = false;
@@ -26,16 +35,10 @@ console.log('Port:', port);
 console.log('Environment:', process.env.NODE_ENV || 'development');
 
 if (!existsSync(compiledServerPath)) {
-  console.log('Compiled server build (dist/server.cjs) not found. Triggering automated build pipeline...');
-  try {
-    execSync('npm run build', { stdio: 'inherit', cwd: projectDir });
-    console.log('✅ Build completed successfully.');
-  } catch (error) {
-    console.error('⚠️ Failed to run build process during start:', error.message);
-    buildError = error.message;
-    console.log('ℹ️ Activating fallback health/status server to prevent Beanstalk deployment failure.');
-    useFallback = true;
-  }
+  console.log('Compiled server build (dist/server.cjs) not found on startup.');
+  console.log('ℹ️ Activating fallback health/status server immediately to keep Beanstalk healthy.');
+  buildError = 'Compiled server build (dist/server.cjs) not found on startup. Please check deployment or build pipeline logs.';
+  useFallback = true;
 }
 
 function startFallbackServer(loadError) {
