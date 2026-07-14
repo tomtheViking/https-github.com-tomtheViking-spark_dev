@@ -778,7 +778,7 @@ function getFallbackVerifyCompliance(transcriptText: string, complianceRules: an
   };
 }
 
-async function startServer() {
+export async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
@@ -2206,11 +2206,20 @@ Return strictly valid JSON matching this schema.`,
 
   // Serve static UI / Vite integration
   if (!isProd) {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+    try {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (viteError) {
+      console.warn("[Spark Server] Failed to initialize Vite development middleware, falling back to static file serving:", viteError);
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
@@ -2225,7 +2234,9 @@ Return strictly valid JSON matching this schema.`,
   });
 }
 
-startServer().catch((err) => {
-  console.error("Failed to start server:", err);
-  process.exit(1);
-});
+if (typeof require !== "undefined" && require.main === module) {
+  startServer().catch((err) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  });
+}

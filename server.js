@@ -83,9 +83,18 @@ function startFallbackServer(loadError) {
 if (!useFallback && existsSync(compiledServerPath)) {
   console.log('🚀 Starting high-performance Spark Platform from compiled bundle...');
   try {
-    require('./dist/server.cjs');
+    const platform = require(compiledServerPath);
+    if (platform && typeof platform.startServer === 'function') {
+      platform.startServer().catch((error) => {
+        console.error('❌ Runtime error during Spark Platform server startup:', error);
+        console.log('ℹ️ Activating fallback health/status server due to runtime error.');
+        startFallbackServer(error);
+      });
+    } else {
+      console.log('ℹ️ Legacy bundle detected or autostart executed.');
+    }
   } catch (error) {
-    console.error('❌ Failed to run compiled server bundle:', error);
+    console.error('❌ Failed to load or run compiled server bundle:', error);
     console.log('ℹ️ Activating fallback health/status server due to runtime error.');
     startFallbackServer(error);
   }
