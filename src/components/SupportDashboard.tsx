@@ -64,6 +64,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { SupportTicket, CallSession } from "../types";
 import InteractiveDashboard from "./InteractiveDashboard";
 import { GoogleMeetWorkspace } from "./GoogleMeetWorkspace";
+import AnalysisReportView from "./AnalysisReportView";
 import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
 import { doc, onSnapshot, collection, setDoc, query, where, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { 
@@ -527,6 +528,89 @@ export default function SupportDashboard({
   const [awsSesInviteName, setAwsSesInviteName] = useState<string>("");
   const [awsSesSending, setAwsSesSending] = useState<boolean>(false);
   const [awsSesDispatchResult, setAwsSesDispatchResult] = useState<any>(null);
+
+  // Call Diagnostics States & Handlers
+  const [viewingDiagnosticSession, setViewingDiagnosticSession] = useState<CallSession | null>(null);
+  const [inspectingTranscriptSession, setInspectingTranscriptSession] = useState<CallSession | null>(null);
+  const [diagnosticsSearchQuery, setDiagnosticsSearchQuery] = useState<string>("");
+  const [diagnosticsStatusFilter, setDiagnosticsStatusFilter] = useState<string>("ALL");
+  const [analyzingSessionId, setAnalyzingSessionId] = useState<string | null>(null);
+
+  const handleRunDiagnosticOnSession = async (sessionToAnalyze: CallSession) => {
+    if (!sessionToAnalyze) return;
+    setAnalyzingSessionId(sessionToAnalyze.id);
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcriptText: sessionToAnalyze.transcriptText || "Call transcript session analysis." })
+      });
+      if (!res.ok) {
+        throw new Error("Failed to run Gemini/Milton analysis.");
+      }
+      const analyticsData = await res.json();
+      const updatedSession: CallSession = {
+        ...sessionToAnalyze,
+        analytics: analyticsData,
+        status: "analyzed"
+      };
+      if (onUpdateSession) {
+        onUpdateSession(updatedSession);
+      }
+      try {
+        await updateDoc(doc(db, "sessions", sessionToAnalyze.id), updatedSession as any);
+        if (sessionToAnalyze.tenantId) {
+          await updateDoc(doc(doc(db, "tenants", sessionToAnalyze.tenantId), "sessions", sessionToAnalyze.id), updatedSession as any);
+        }
+      } catch (e) {
+        console.warn("Firestore update notice:", e);
+      }
+      setToast({ message: `Successfully completed Spark diagnostic analysis for call: ${sessionToAnalyze.title || sessionToAnalyze.id}`, type: "success" });
+    } catch (err: any) {
+      console.error("[Diagnostics] Analysis error:", err);
+      setToast({ message: err.message || "Failed to analyze call session.", type: "error" });
+    } finally {
+      setAnalyzingSessionId(null);
+    }
+  };
+
+  const handleSeedSampleCallSession = async () => {
+    const seedSession: CallSession = {
+      id: `seed-diag-${Date.now()}`,
+      title: "Zoom Call: Arachnid Systems Partnership Discovery",
+      customerName: "Arachnid Systems",
+      repName: parentAuthUser?.displayName || "Tom Hansen",
+      date: new Date().toISOString(),
+      transcriptText: "Representative: Welcome Phil, thank you for joining our Spark call today. Customer (Phil Muffins): Absolutely. We want to align our multi-tenant telemetry and automated diagnostic pipelines immediately.",
+      status: "analyzed",
+      analysisNumber: `AN-2026-${Math.floor(100 + Math.random() * 900)}`,
+      tenantId: "CLIENT-A",
+      tenantName: "Arachnid Systems",
+      analytics: {
+        successPercentage: 88,
+        repEmpathyScore: 9.4,
+        keyDrivers: ["Clear value alignment", "Data privacy assurances", "ROI frame established"],
+        customerSentiment: "positive",
+        objectionsHandled: ["Security compliance", "Deployment lead time"],
+        actionItems: ["Send custom SLA agreement", "Schedule tenant provisioning review"],
+        summary: "High-alignment discovery call with strong agreement on platform deployment timelines and compliance features.",
+        talkRatioRep: 48,
+        talkRatioCustomer: 52
+      }
+    };
+    if (onAddSession) {
+      onAddSession(seedSession);
+    }
+    try {
+      await setDoc(doc(db, "sessions", seedSession.id), seedSession);
+      if (seedSession.tenantId) {
+        await setDoc(doc(db, "tenants", seedSession.tenantId, "sessions", seedSession.id), seedSession);
+      }
+    } catch (e) {
+      console.warn("Firestore set notice:", e);
+    }
+    setToast({ message: "Sample diagnostic call session added to workspace.", type: "success" });
+  };
 
   // Fetch Gong details on mount
   useEffect(() => {
@@ -5051,6 +5135,285 @@ const sendEmailSmtp = async () => {
               </motion.div>
             )}
 
+            {/* VIEW 6: CALL DIAGNOSTICS & DIALOGUE ANALYSIS */}
+            {activeSupportTab === "diagnostics" && (
+              <motion.div 
+                key="view-diagnostics"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6"
+              >
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 border-b border-slate-800 pb-4">
+                  <div className="space-y-1">
+                    <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-blue-400" />
+                      <span>Call Diagnostics & Dialogue Analysis Console</span>
+                    </h2>
+                    <p className="text-xs text-slate-400">
+                      High-resolution sales call telemetry, psychological persuasion scoring, Milton Model NLP alignment, and automated diagnostic reports.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleSeedSampleCallSession}
+                      className="bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 font-mono text-xs font-bold py-2 px-3.5 rounded-xl transition-all flex items-center gap-2 shadow-sm cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Seed Diagnostic Session</span>
+                    </button>
+                    <span className="text-[10px] font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2.5 py-1 rounded font-bold uppercase shrink-0">
+                      Spark Model Engine v1.2 Active
+                    </span>
+                  </div>
+                </div>
+
+                {/* Metrics Summary Strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/80 space-y-1">
+                    <p className="text-[10px] font-mono font-bold text-slate-500 uppercase">Total Call Sessions</p>
+                    <p className="text-xl font-bold font-mono text-slate-100">{sessions.length}</p>
+                  </div>
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/80 space-y-1">
+                    <p className="text-[10px] font-mono font-bold text-slate-500 uppercase">Analyzed Sessions</p>
+                    <p className="text-xl font-bold font-mono text-emerald-400">
+                      {sessions.filter(s => s.status === "analyzed").length}
+                    </p>
+                  </div>
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/80 space-y-1">
+                    <p className="text-[10px] font-mono font-bold text-slate-500 uppercase">Avg Persuasion Index</p>
+                    <p className="text-xl font-bold font-mono text-blue-400">
+                      {sessions.filter(s => s.analytics?.successPercentage).length > 0
+                        ? `${Math.round(sessions.reduce((acc, s) => acc + (s.analytics?.successPercentage || 0), 0) / sessions.filter(s => s.analytics?.successPercentage).length)}%`
+                        : "86%"}
+                    </p>
+                  </div>
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/80 space-y-1">
+                    <p className="text-[10px] font-mono font-bold text-slate-500 uppercase">Avg Empathy Index</p>
+                    <p className="text-xl font-bold font-mono text-purple-400">
+                      {sessions.filter(s => s.analytics?.repEmpathyScore).length > 0
+                        ? `${(sessions.reduce((acc, s) => acc + (s.analytics?.repEmpathyScore || 0), 0) / sessions.filter(s => s.analytics?.repEmpathyScore).length).toFixed(1)} / 10`
+                        : "9.1 / 10"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Filter and Search Bar */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800/80 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                  {/* Search Query */}
+                  <div className="space-y-1.5 md:col-span-2">
+                    <label className="text-[10px] text-slate-500 font-mono font-bold uppercase flex items-center gap-1">
+                      <Search className="w-3 h-3" />
+                      <span>Search Call Diagnostic Records</span>
+                    </label>
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Filter by session ID, title, rep name, customer name, or keyword..."
+                        value={diagnosticsSearchQuery}
+                        onChange={(e) => setDiagnosticsSearchQuery(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Status Filter */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-slate-500 font-mono font-bold uppercase flex items-center gap-1">
+                      <Filter className="w-3 h-3" />
+                      <span>Analysis Status</span>
+                    </label>
+                    <select
+                      value={diagnosticsStatusFilter}
+                      onChange={(e) => setDiagnosticsStatusFilter(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-blue-500 font-mono"
+                    >
+                      <option value="ALL">All Statuses ({sessions.length})</option>
+                      <option value="analyzed">Analyzed Only</option>
+                      <option value="pending">Pending Analysis</option>
+                      <option value="failed">Failed / Warning</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Call Sessions List */}
+                <div className="space-y-3">
+                  {(() => {
+                    const filtered = sessions.filter(s => {
+                      const matchesTenant = selectedTenant === "ALL_TENANTS" || s.tenantId === selectedTenant;
+                      const q = diagnosticsSearchQuery.toLowerCase().trim();
+                      const matchesQuery = !q || 
+                        s.title?.toLowerCase().includes(q) ||
+                        s.customerName?.toLowerCase().includes(q) ||
+                        s.repName?.toLowerCase().includes(q) ||
+                        s.id?.toLowerCase().includes(q) ||
+                        s.analysisNumber?.toLowerCase().includes(q) ||
+                        s.transcriptText?.toLowerCase().includes(q);
+                      const matchesStatus = diagnosticsStatusFilter === "ALL" || s.status === diagnosticsStatusFilter;
+                      return matchesTenant && matchesQuery && matchesStatus;
+                    });
+
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="bg-slate-950/60 border border-dashed border-slate-800 rounded-2xl p-12 text-center space-y-3">
+                          <Sparkles className="w-10 h-10 text-slate-700 mx-auto animate-pulse" />
+                          <div className="space-y-1">
+                            <p className="text-xs font-mono text-slate-400 font-bold">No Call Diagnostic Sessions Found</p>
+                            <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
+                              No call sessions matched your current tenant lock or search query. Click below to seed a sample diagnostic call.
+                            </p>
+                          </div>
+                          <button
+                            onClick={handleSeedSampleCallSession}
+                            className="bg-blue-600 hover:bg-blue-500 text-white font-mono text-xs font-bold py-2 px-4 rounded-xl transition-all inline-flex items-center gap-2 shadow-md cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Seed Diagnostic Call Session</span>
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="grid grid-cols-1 gap-4">
+                        {filtered.map(s => {
+                          const isAnalyzed = s.status === "analyzed";
+                          const isAnalyzing = analyzingSessionId === s.id;
+                          return (
+                            <div 
+                              key={s.id}
+                              className="bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-xl p-4 transition-all space-y-4"
+                            >
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/60 pb-3">
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[10px] font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2 py-0.5 rounded font-bold">
+                                      {s.analysisNumber || s.id}
+                                    </span>
+                                    <h3 className="text-sm font-bold text-slate-100">{s.title || "Call Session Record"}</h3>
+                                    {s.tenantName && (
+                                      <span className="text-[10px] font-mono bg-slate-800 text-slate-400 px-2 py-0.5 rounded">
+                                        {s.tenantName}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-4 text-xs text-slate-400 flex-wrap">
+                                    <span className="flex items-center gap-1">
+                                      <Building className="w-3.5 h-3.5 text-slate-500" />
+                                      <span className="font-semibold text-slate-300">{s.customerName || "Customer"}</span>
+                                    </span>
+                                    <span className="flex items-center gap-1">
+                                      <User className="w-3.5 h-3.5 text-slate-500" />
+                                      <span>Rep: <strong className="text-slate-300">{s.repName || "Representative"}</strong></span>
+                                    </span>
+                                    <span className="flex items-center gap-1">
+                                      <Clock className="w-3.5 h-3.5 text-slate-500" />
+                                      <span>{s.date ? new Date(s.date).toLocaleDateString() : "Recent"}</span>
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {isAnalyzed ? (
+                                    <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded font-bold flex items-center gap-1">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      <span>Analyzed</span>
+                                    </span>
+                                  ) : s.status === "failed" ? (
+                                    <span className="text-[10px] font-mono bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2.5 py-1 rounded font-bold flex items-center gap-1">
+                                      <AlertCircle className="w-3 h-3" />
+                                      <span>Analysis Error</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded font-bold flex items-center gap-1">
+                                      <Clock className="w-3 h-3 animate-spin" />
+                                      <span>Pending Analysis</span>
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Analytics Summary if available */}
+                              {s.analytics ? (
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-900/60 p-3 rounded-lg border border-slate-800/50 text-xs">
+                                  <div>
+                                    <span className="text-[10px] font-mono text-slate-500 uppercase block font-bold">Persuasion Score</span>
+                                    <div className="flex items-center gap-2 mt-0.5">
+                                      <div className="flex-1 bg-slate-800 h-2 rounded-full overflow-hidden">
+                                        <div 
+                                          className="bg-blue-500 h-full rounded-full transition-all"
+                                          style={{ width: `${s.analytics.successPercentage || 75}%` }}
+                                        />
+                                      </div>
+                                      <span className="font-mono font-bold text-blue-400">{s.analytics.successPercentage || 75}%</span>
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <span className="text-[10px] font-mono text-slate-500 uppercase block font-bold">Empathy Index</span>
+                                    <p className="font-mono font-bold text-purple-400 mt-0.5">
+                                      {s.analytics.repEmpathyScore || 8.5} / 10
+                                    </p>
+                                  </div>
+
+                                  <div>
+                                    <span className="text-[10px] font-mono text-slate-500 uppercase block font-bold">Objections Handled</span>
+                                    <p className="text-slate-300 mt-0.5 truncate">
+                                      {s.analytics.objectionsHandled?.length ? s.analytics.objectionsHandled.join(", ") : "None flagged"}
+                                    </p>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="bg-slate-900/40 p-3 rounded-lg border border-slate-800/40 text-xs text-slate-400 italic">
+                                  No pre-computed analytics attached. Click "Run Spark Diagnostic" to execute Gemini / Milton Model alignment engine.
+                                </div>
+                              )}
+
+                              {/* Action Buttons */}
+                              <div className="flex items-center justify-between gap-3 pt-1 flex-wrap">
+                                <button
+                                  onClick={() => setInspectingTranscriptSession(s)}
+                                  className="text-xs text-slate-400 hover:text-slate-200 font-mono flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <FileText className="w-3.5 h-3.5 text-slate-500" />
+                                  <span>View Transcript ({s.transcriptText ? `${s.transcriptText.length} chars` : "0 chars"})</span>
+                                </button>
+
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => handleRunDiagnosticOnSession(s)}
+                                    disabled={isAnalyzing}
+                                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/80 font-mono text-xs font-semibold py-1.5 px-3 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                  >
+                                    {isAnalyzing ? (
+                                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                                    ) : (
+                                      <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                                    )}
+                                    <span>{isAnalyzing ? "Analyzing..." : "Run Spark Diagnostic"}</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => setViewingDiagnosticSession(s)}
+                                    className="bg-blue-600 hover:bg-blue-500 text-white font-mono text-xs font-bold py-1.5 px-3.5 rounded-lg transition-all flex items-center gap-1.5 shadow-md cursor-pointer"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>View Diagnostic Report</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </motion.div>
+            )}
+
             {/* VIEW 7: TENANT S3 COMPLIANCE STORES */}
             {activeSupportTab === "tenant-data" && (
               <motion.div 
@@ -5911,6 +6274,65 @@ const sendEmailSmtp = async () => {
                 )}
               </div>
             </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Full Diagnostic Report Modal */}
+      <AnimatePresence>
+        {viewingDiagnosticSession && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto">
+            <div className="w-full max-w-5xl max-h-[92vh] overflow-y-auto bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative">
+              <AnalysisReportView
+                session={viewingDiagnosticSession}
+                onClose={() => setViewingDiagnosticSession(null)}
+              />
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Inspect Raw Transcript Modal */}
+      <AnimatePresence>
+        {inspectingTranscriptSession && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="space-y-0.5">
+                  <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-blue-400" />
+                    <span>Transcript Record: {inspectingTranscriptSession.title}</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono">
+                    ID: {inspectingTranscriptSession.id} | Rep: {inspectingTranscriptSession.repName}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setInspectingTranscriptSession(null)}
+                  className="text-slate-400 hover:text-slate-100 p-1 rounded-lg hover:bg-slate-800 transition-all cursor-pointer"
+                >
+                  <XCircle className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto bg-slate-950 p-4 rounded-xl border border-slate-800 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+                {inspectingTranscriptSession.transcriptText || "No transcript text available for this session."}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  onClick={() => {
+                    const s = inspectingTranscriptSession;
+                    setInspectingTranscriptSession(null);
+                    setViewingDiagnosticSession(s);
+                  }}
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-mono text-xs font-bold py-2 px-4 rounded-xl transition-all inline-flex items-center gap-2 cursor-pointer"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>Open Full Diagnostic Report</span>
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </AnimatePresence>

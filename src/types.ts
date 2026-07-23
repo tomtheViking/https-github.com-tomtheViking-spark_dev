@@ -17,15 +17,21 @@ export interface CoachingIntervention {
 
 export interface CallAnalytics {
   successPercentage: number; // 0 to 100
-  speakingListeningRatio: string; // e.g. "40:60"
+  speakingListeningRatio?: string; // e.g. "40:60"
   customerSentiment: 'positive' | 'neutral' | 'negative';
   repEmpathyScore: number; // 1 to 10
-  customerObjectionResistance: number; // 1 to 10
-  confidenceIndex: number; // 1 to 10
-  keyInsights: string[];
-  miltonPatterns: MiltonPatternMatch[];
-  coachingInterventions: CoachingIntervention[];
-  nextSteps: string[];
+  customerObjectionResistance?: number; // 1 to 10
+  confidenceIndex?: number; // 1 to 10
+  keyInsights?: string[];
+  keyDrivers?: string[];
+  objectionsHandled?: string[];
+  actionItems?: string[];
+  summary?: string;
+  talkRatioRep?: number;
+  talkRatioCustomer?: number;
+  miltonPatterns?: MiltonPatternMatch[];
+  coachingInterventions?: CoachingIntervention[];
+  nextSteps?: string[];
 }
 
 export interface CustomerFeedback {
