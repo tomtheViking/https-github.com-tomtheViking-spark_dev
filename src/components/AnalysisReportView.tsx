@@ -255,9 +255,9 @@ export default function AnalysisReportView({ session, onClose }: AnalysisReportV
   const scores = isLuciaSession ? luciaScores : getDynamicScores(session);
 
   return (
-    <div id="executive-report-print-wrapper" className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fade-in print:p-0 print:bg-white print:absolute print:inset-0">
+    <div id="executive-report-print-wrapper" className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fade-in print:p-0 print:bg-white print:static print:inset-auto print:block print:overflow-visible print:h-auto print:max-h-none">
       {/* Outer wrapper: full screen on web, disappears on print except for document view */}
-      <div className="bg-slate-100 w-full max-w-5xl h-[95vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-slate-200 print:w-full print:h-auto print:bg-white print:shadow-none print:border-none print:rounded-none">
+      <div className="bg-slate-100 w-full max-w-5xl h-[95vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-slate-200 print:w-full print:h-auto print:bg-white print:shadow-none print:border-none print:rounded-none print:block print:overflow-visible print:max-h-none">
         
         {/* Web Controls Header - HIDDEN ON PRINT */}
         <div className="bg-slate-900 text-white p-5 flex justify-between items-center shrink-0 print:hidden">
@@ -290,13 +290,13 @@ export default function AnalysisReportView({ session, onClose }: AnalysisReportV
         </div>
 
         {/* Printable Document Scroll Area */}
-        <div className="flex-1 overflow-y-auto bg-slate-200 p-8 print:p-0 print:bg-white print:overflow-visible">
+        <div className="flex-1 overflow-y-auto bg-slate-200 p-8 print:p-0 print:bg-white print:overflow-visible print:block print:h-auto print:max-h-none">
           
           {/* Printable Container */}
-          <div className="space-y-12 max-w-[800px] mx-auto print:space-y-0 print:max-w-full">
+          <div className="space-y-12 max-w-[800px] mx-auto print:space-y-0 print:max-w-full print:block print:w-full">
             
             {/* ==================== PAGE 1 ==================== */}
-            <div className="bg-white shadow-lg border border-slate-300 px-12 py-16 min-h-[1120px] relative flex flex-col justify-between font-sans text-slate-800 print:shadow-none print:border-none print:min-h-0 print:py-4 print:px-0">
+            <div className="bg-white shadow-lg border border-slate-300 px-12 py-16 min-h-[1120px] relative flex flex-col justify-between font-sans text-slate-800 print:shadow-none print:border-none print:min-h-0 print:py-4 print:px-0 print:block print:overflow-visible">
               <div>
                 {/* Header Line */}
                 <div className="flex justify-between items-center border-b border-slate-200 pb-2 mb-8 text-[11px] font-mono tracking-widest text-slate-500">

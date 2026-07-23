@@ -72,22 +72,32 @@ body {
   }
 
   /* Reset outer container layouts to fill the entire printed page */
+  html,
   body {
     background-color: #fff !important;
     color: #000 !important;
     padding: 0 !important;
     margin: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
   }
 
   #spark_app_root,
-  main {
+  main,
+  #root {
     padding: 0 !important;
     margin: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
     display: block !important;
     box-shadow: none !important;
     border: none !important;
+    position: static !important;
   }
 
   #playbook-document-view {
@@ -109,6 +119,9 @@ body {
   .print-break-before {
     break-before: page !important;
     page-break-before: always !important;
+    display: block !important;
+    position: relative !important;
+    overflow: visible !important;
   }
 
   /* Ensure code/script blocks preserve newlines on print */
@@ -128,14 +141,15 @@ body {
 
   #executive-report-print-wrapper {
     display: block !important;
-    position: absolute !important;
-    left: 0 !important;
-    top: 0 !important;
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
     width: 100% !important;
     height: auto !important;
+    max-height: none !important;
     overflow: visible !important;
     background: #fff !important;
-    z-index: 9999999 !important;
+    z-index: auto !important;
     padding: 0 !important;
     margin: 0 !important;
     box-shadow: none !important;

@@ -6281,14 +6281,10 @@ const sendEmailSmtp = async () => {
       {/* Full Diagnostic Report Modal */}
       <AnimatePresence>
         {viewingDiagnosticSession && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto">
-            <div className="w-full max-w-5xl max-h-[92vh] overflow-y-auto bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative">
-              <AnalysisReportView
-                session={viewingDiagnosticSession}
-                onClose={() => setViewingDiagnosticSession(null)}
-              />
-            </div>
-          </div>
+          <AnalysisReportView
+            session={viewingDiagnosticSession}
+            onClose={() => setViewingDiagnosticSession(null)}
+          />
         )}
       </AnimatePresence>
 
