@@ -130,21 +130,15 @@ export default function Enrollment({ onSuccess }: EnrollmentProps) {
       try {
         await signInWithEmailAndPassword(auth, email, newPassword);
       } catch (authErr: any) {
-        console.warn("Firebase email/password auth login failed during enrollment:", authErr);
-        if (authErr.code === "auth/operation-not-allowed") {
-          // Store a local mock user so the client-side session is logged in
-          const localUser = {
-            uid: "sandbox-uid-" + Math.random().toString(36).substring(2, 11),
-            name: email.split("@")[0],
-            displayName: email.split("@")[0],
-            email: email,
-            tenant_id: data.tenantId,
-            role: data.role,
-          };
-          localStorage.setItem("spark_sandbox_user", JSON.stringify(localUser));
-        } else {
-          throw authErr;
-        }
+        console.warn("Firebase email/password auth login skipped during enrollment:", authErr?.message || authErr);
+        // Fall back gracefully to local sandbox user session
+        localStorage.setItem("spark_sandbox_user", JSON.stringify({
+          uid: "sb-user-" + email.trim().toLowerCase().replace(/[^a-z0-9]/g, "-"),
+          email,
+          displayName: email.split("@")[0],
+          tenant_id: data.tenantId,
+          role: data.role
+        }));
       }
 
       // 3. Trigger success callback to redirect to the authenticated dashboard

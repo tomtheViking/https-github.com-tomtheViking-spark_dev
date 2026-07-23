@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
@@ -14,8 +14,13 @@ const firebaseConfig = {
 // Initialize Firebase with a guard to prevent duplicate-app errors
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Initialize Firestore with the custom database ID from our config
-export const db = getFirestore(app, "ai-studio-sparkanalytic-77f894c0-f2b2-4c88-a711-f8b44ece36e8");
+// Initialize Firestore with long-polling and persistent offline cache enabled for sandbox stability
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager()
+  })
+}, "ai-studio-sparkanalytic-77f894c0-f2b2-4c88-a711-f8b44ece36e8");
 
 // Initialize Auth
 export const auth = getAuth(app);

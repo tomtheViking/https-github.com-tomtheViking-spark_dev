@@ -44,11 +44,26 @@ import {
   LockKeyhole,
   KeyRound,
   Sparkles,
-  Globe
+  Globe,
+  Database,
+  HardDrive,
+  FolderOpen,
+  UploadCloud,
+  FileText,
+  Eye,
+  EyeOff,
+  Layers,
+  Copy,
+  Code,
+  Video,
+  Sliders,
+  Play,
+  Loader2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { SupportTicket, CallSession } from "../types";
 import InteractiveDashboard from "./InteractiveDashboard";
+import { GoogleMeetWorkspace } from "./GoogleMeetWorkspace";
 import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
 import { doc, onSnapshot, collection, setDoc, query, where, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { 
@@ -301,7 +316,47 @@ interface CustomerTenant {
   activationToken?: string;
   tempPassword?: string;
   activationStatus?: 'Not Invited' | 'Invited' | 'Active';
+  s3Files?: any[];
 }
+
+const DEFAULT_S3_FILES = [
+  {
+    id: "kb-playbook-v4",
+    name: "Spark Enterprise Sales Playbook v4",
+    type: "material",
+    url: "https://sparkanalytic.com/secure/playbook-v4.pdf",
+    description: "Core sales coaching playbook for handling competitive objections and latency SLA discussions.",
+    directive: "Check if reps proactively ask about latency concerns and validate SLA thresholds within 50ms.",
+    uploadedAt: "2026-07-10T14:30:00Z",
+    size: "2.4 MB",
+    status: "synced",
+    s3Uri: "s3://spark-tenant-data-default/materials/playbook-v4.pdf"
+  },
+  {
+    id: "kb-sla-policy",
+    name: "Enterprise SLA & Zero-Air Perimeter Compliance Policy",
+    type: "policy",
+    url: "https://sparkanalytic.com/secure/SLA_Policy_Compliance_v2.docx",
+    description: "Standard SLA policy outlining 99.9% webhook uptime guarantee and Dual-Authorization compliance checklist.",
+    directive: "Audit against sections 4.2 and 5.1 to ensure reps mention the dual-authorization secure perimeter.",
+    uploadedAt: "2026-07-11T09:15:00Z",
+    size: "820 KB",
+    status: "synced",
+    s3Uri: "s3://spark-tenant-data-default/policies/SLA_Policy_Compliance_v2.docx"
+  },
+  {
+    id: "kb-arachnid-specs",
+    name: "Arachnid Webhook Integration Technical Reference",
+    type: "policy",
+    url: "https://sparkanalytic.com/secure/Arachnid_Systems_Technical_Specs.pdf",
+    description: "Technical integration specifications for S3 ingestion blocks and webhook dual-authorization.",
+    directive: "Verify if client integration doubts regarding webhook latency are answered correctly.",
+    uploadedAt: "2026-07-12T11:45:00Z",
+    size: "1.2 MB",
+    status: "synced",
+    s3Uri: "s3://spark-tenant-data-default/policies/Arachnid_Systems_Technical_Specs.pdf"
+  }
+];
 
 const MOCK_CUSTOMERS: CustomerTenant[] = [
   {
@@ -386,6 +441,7 @@ interface SupportDashboardProps {
   onUpdateSession?: (session: CallSession) => void;
   onSelectSession?: (session: CallSession | null) => void;
   activeSession?: CallSession | null;
+  parentAuthUser?: any;
 }
 
 export default function SupportDashboard({ 
@@ -395,7 +451,8 @@ export default function SupportDashboard({
   onAddSession,
   onUpdateSession,
   onSelectSession,
-  activeSession
+  activeSession,
+  parentAuthUser
 }: SupportDashboardProps = {}) {
   // Selected Tenant lock filter
   const [selectedTenant, setSelectedTenant] = useState<string>("ALL_TENANTS");
@@ -403,7 +460,453 @@ export default function SupportDashboard({
   const [isTenantDropdownOpen, setIsTenantDropdownOpen] = useState<boolean>(false);
 
   // Active navigation view inside the component
-  const [activeSupportTab, setActiveSupportTab] = useState<"all" | "customer-manager" | "telemetry" | "tickets" | "credentials" | "batch" | "diagnostics">("all");
+  const [activeSupportTab, setActiveSupportTab] = useState<"all" | "customer-manager" | "telemetry" | "tickets" | "credentials" | "batch" | "diagnostics" | "tenant-data" | "integrations">("all");
+
+  // Integration Toggle states
+  const [zoomConnected, setZoomConnected] = useState<boolean>(() => {
+    const saved = localStorage.getItem("spark_zoom_connected");
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+  const [gongConnected, setGongConnected] = useState<boolean>(true);
+  const [teamsConnected, setTeamsConnected] = useState<boolean>(false);
+  const [googleConnected, setGoogleConnected] = useState<boolean>(() => {
+    const saved = localStorage.getItem("spark_google_connected");
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+
+  // Gong Integration Configuration States
+  const [gongModalOpen, setGongModalOpen] = useState<boolean>(false);
+  const [gongAccessKeyId, setGongAccessKeyId] = useState<string>("");
+  const [gongAccessKeySecret, setGongAccessKeySecret] = useState<string>("");
+  const [gongApiEndpoint, setGongApiEndpoint] = useState<string>("https://api.gong.io/v2/");
+  const [gongAutoEnabled, setGongAutoEnabled] = useState<boolean>(true);
+  const [gongInterval, setGongInterval] = useState<number>(60);
+  const [gongLogs, setGongLogs] = useState<any[]>([]);
+  const [gongLogsLoading, setGongLogsLoading] = useState<boolean>(false);
+  const [gongSyncing, setGongSyncing] = useState<boolean>(false);
+  const [gongSuccessMessage, setGongSuccessMessage] = useState<string | null>(null);
+  const [gongErrorMessage, setGongErrorMessage] = useState<string | null>(null);
+
+  // Zoom Integration Configuration States
+  const [zoomModalOpen, setZoomModalOpen] = useState<boolean>(false);
+  const [zoomAccountId, setZoomAccountId] = useState<string>("");
+  const [zoomClientId, setZoomClientId] = useState<string>("");
+  const [zoomClientSecret, setZoomClientSecret] = useState<string>("");
+  const [zoomSecretToken, setZoomSecretToken] = useState<string>("");
+  const [zoomAutoEnabled, setZoomAutoEnabled] = useState<boolean>(true);
+  const [zoomInterval, setZoomInterval] = useState<number>(60);
+  const [zoomLogs, setZoomLogs] = useState<any[]>([]);
+  const [zoomLogsLoading, setZoomLogsLoading] = useState<boolean>(false);
+  const [zoomSyncing, setZoomSyncing] = useState<boolean>(false);
+  const [zoomSuccessMessage, setZoomSuccessMessage] = useState<string | null>(null);
+  const [zoomErrorMessage, setZoomErrorMessage] = useState<string | null>(null);
+
+  // OAuth Simulator States
+  const [oauthModalOpen, setOauthModalOpen] = useState<boolean>(false);
+  const [oauthPlatform, setOauthPlatform] = useState<"zoom" | "google">("zoom");
+  const [oauthStep, setOauthStep] = useState<1 | 2 | 3 | 4>(1);
+  const [oauthLoading, setOauthLoading] = useState<boolean>(false);
+  const [oauthCode, setOauthCode] = useState<string>("");
+  const [oauthTokenResponse, setOauthTokenResponse] = useState<any>(null);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+
+  // Auto-retry with exponential backoff states
+  const [simulateFlakyNetwork, setSimulateFlakyNetwork] = useState<boolean>(false);
+  const [oauthRetryAttempt, setOauthRetryAttempt] = useState<number>(0);
+  const [oauthMaxAttempts] = useState<number>(4);
+  const [oauthRetryLogs, setOauthRetryLogs] = useState<string[]>([]);
+  const [oauthIsRetrying, setOauthIsRetrying] = useState<boolean>(false);
+  const [oauthCountdown, setOauthCountdown] = useState<number>(0);
+
+  // AWS SES Platform Integration States
+  const [awsSesModalOpen, setAwsSesModalOpen] = useState<boolean>(false);
+  const [awsSesEnabled, setAwsSesEnabled] = useState<boolean>(true);
+  const [awsSesInviteEmail, setAwsSesInviteEmail] = useState<string>("");
+  const [awsSesInviteRole, setAwsSesInviteRole] = useState<string>("tenant_admin");
+  const [awsSesInviteTenantId, setAwsSesInviteTenantId] = useState<string>("CLIENT-A");
+  const [awsSesInviteName, setAwsSesInviteName] = useState<string>("");
+  const [awsSesSending, setAwsSesSending] = useState<boolean>(false);
+  const [awsSesDispatchResult, setAwsSesDispatchResult] = useState<any>(null);
+
+  // Fetch Gong details on mount
+  useEffect(() => {
+    fetchGongCredentials();
+    fetchGongLogs();
+    fetchZoomCredentials();
+    fetchZoomLogs();
+  }, []);
+
+  const fetchZoomCredentials = async () => {
+    try {
+      const res = await fetch("/api/v1/zoom/credentials");
+      if (res.ok) {
+        const data = await res.json();
+        setZoomAccountId(data.accountId || "");
+        setZoomClientId(data.clientId || "");
+        setZoomClientSecret(data.clientSecretMasked || "");
+        setZoomSecretToken(data.secretTokenMasked || "");
+        setZoomAutoEnabled(!!data.enabled);
+        setZoomInterval(data.pollingIntervalMinutes || 60);
+        setZoomConnected(!!data.enabled);
+      }
+    } catch (err) {
+      console.error("Failed to load Zoom credentials", err);
+    }
+  };
+
+  const fetchZoomLogs = async () => {
+    setZoomLogsLoading(true);
+    try {
+      const res = await fetch("/api/v1/zoom/sync-logs");
+      if (res.ok) {
+        const data = await res.json();
+        setZoomLogs(data);
+      }
+    } catch (err) {
+      console.error("Failed to load Zoom sync logs", err);
+    } finally {
+      setZoomLogsLoading(false);
+    }
+  };
+
+  const saveZoomCredentials = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setZoomErrorMessage(null);
+    setZoomSuccessMessage(null);
+    try {
+      const res = await fetch("/api/v1/zoom/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId: zoomAccountId,
+          clientId: zoomClientId,
+          clientSecret: zoomClientSecret,
+          secretToken: zoomSecretToken,
+          enabled: zoomAutoEnabled,
+          pollingIntervalMinutes: zoomInterval
+        })
+      });
+      if (res.ok) {
+        setZoomSuccessMessage("Zoom settings saved successfully!");
+        setZoomConnected(zoomAutoEnabled);
+        setTimeout(() => setZoomSuccessMessage(null), 4000);
+        fetchZoomCredentials();
+        fetchZoomLogs();
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to update Zoom settings.");
+      }
+    } catch (err: any) {
+      setZoomErrorMessage(err.message || "Network error. Failed to save Zoom settings.");
+    }
+  };
+
+  const triggerZoomManualSync = async () => {
+    setZoomSyncing(true);
+    setZoomErrorMessage(null);
+    setZoomSuccessMessage(null);
+    try {
+      const res = await fetch("/api/v1/zoom/sync", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setZoomSuccessMessage(`Sync Complete! Successfully pulled and ingested ${data.callsIngested || 0} Zoom recordings into the active workspace.`);
+        fetchZoomLogs();
+        setTimeout(() => {
+          setZoomSuccessMessage(null);
+          window.location.reload();
+        }, 1500);
+      } else {
+        throw new Error(data.error || "Zoom manual sync was rejected by remote API.");
+      }
+    } catch (err: any) {
+      setZoomErrorMessage(err.message || "Zoom manual synchronization failed.");
+    } finally {
+      setZoomSyncing(false);
+    }
+  };
+
+  const fetchGongCredentials = async () => {
+    try {
+      const res = await fetch("/api/v1/gong/credentials");
+      if (res.ok) {
+        const data = await res.json();
+        setGongAccessKeyId(data.accessKeyId || "");
+        setGongAccessKeySecret(data.accessKeySecretMasked || "");
+        setGongApiEndpoint(data.apiEndpoint || "https://api.gong.io/v2/");
+        setGongAutoEnabled(!!data.enabled);
+        setGongInterval(data.pollingIntervalMinutes || 60);
+        setGongConnected(!!data.enabled);
+      }
+    } catch (err) {
+      console.error("Failed to load Gong credentials", err);
+    }
+  };
+
+  const fetchGongLogs = async () => {
+    setGongLogsLoading(true);
+    try {
+      const res = await fetch("/api/v1/gong/sync-logs");
+      if (res.ok) {
+        const data = await res.json();
+        setGongLogs(data);
+      }
+    } catch (err) {
+      console.error("Failed to load Gong sync logs", err);
+    } finally {
+      setGongLogsLoading(false);
+    }
+  };
+
+  const saveGongCredentials = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setGongErrorMessage(null);
+    setGongSuccessMessage(null);
+    try {
+      const res = await fetch("/api/v1/gong/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessKeyId: gongAccessKeyId,
+          accessKeySecret: gongAccessKeySecret,
+          apiEndpoint: gongApiEndpoint,
+          enabled: gongAutoEnabled,
+          pollingIntervalMinutes: gongInterval
+        })
+      });
+      if (res.ok) {
+        setGongSuccessMessage("Gong settings saved successfully!");
+        setGongConnected(gongAutoEnabled);
+        setTimeout(() => setGongSuccessMessage(null), 4000);
+        fetchGongCredentials();
+        fetchGongLogs();
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to update settings.");
+      }
+    } catch (err: any) {
+      setGongErrorMessage(err.message || "Network error. Failed to save credentials.");
+    }
+  };
+
+  const triggerGongManualSync = async () => {
+    setGongSyncing(true);
+    setGongErrorMessage(null);
+    setGongSuccessMessage(null);
+    try {
+      const res = await fetch("/api/v1/gong/sync", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setGongSuccessMessage(`Sync Complete! Successfully pulled and ingested ${data.callsIngested || 0} recent calls into the active workspace.`);
+        fetchGongLogs();
+        setTimeout(() => {
+          setGongSuccessMessage(null);
+          window.location.reload();
+        }, 1500);
+      } else {
+        throw new Error(data.error || "Gong manual sync was rejected by remote API.");
+      }
+    } catch (err: any) {
+      setGongErrorMessage(err.message || "Manual synchronization failed.");
+    } finally {
+      setGongSyncing(false);
+    }
+  };
+
+  const fetchWithRetry = async (
+    fetchFn: () => Promise<Response>,
+    onSuccess: (data: any) => void,
+    onFailure: (err: any) => void,
+    actionName: string
+  ) => {
+    let attempt = 1;
+    let delay = 1000; // 1 second initial delay
+    setOauthRetryAttempt(1);
+    setOauthRetryLogs([`[${actionName}] Initiating Attempt 1...`]);
+    setOauthIsRetrying(true);
+
+    const execute = async () => {
+      try {
+        if (simulateFlakyNetwork && attempt < 3) {
+          throw new Error(`[Simulated Error] Rate-limit (Attempt ${attempt}/${oauthMaxAttempts})`);
+        }
+
+        const response = await fetchFn();
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || `${actionName} failed with HTTP status ${response.status}`);
+        }
+
+        setOauthRetryLogs((prev) => [
+          ...prev,
+          `[${actionName}] Attempt ${attempt} succeeded! Response code: 200 OK.`
+        ]);
+        setOauthIsRetrying(false);
+        setOauthRetryAttempt(0);
+        onSuccess(data);
+      } catch (err: any) {
+        console.warn(`Attempt ${attempt} failed:`, err.message);
+        const errMsg = err.message || "Unknown transport error";
+        
+        if (attempt < oauthMaxAttempts) {
+          const currentDelay = delay;
+          setOauthRetryLogs((prev) => [
+            ...prev,
+            `✕ Attempt ${attempt} failed: ${errMsg}`,
+            `➔ Backing off exponentially. Retrying in ${(currentDelay / 1000).toFixed(1)}s...`
+          ]);
+
+          let secondsLeft = currentDelay / 1000;
+          setOauthCountdown(secondsLeft);
+          const interval = setInterval(() => {
+            secondsLeft -= 0.5;
+            if (secondsLeft <= 0) {
+              clearInterval(interval);
+            } else {
+              setOauthCountdown(secondsLeft);
+            }
+          }, 500);
+
+          await new Promise((resolve) => setTimeout(resolve, currentDelay));
+          clearInterval(interval);
+          setOauthCountdown(0);
+
+          attempt++;
+          delay *= 2; // exponential backoff
+          setOauthRetryAttempt(attempt);
+          setOauthRetryLogs((prev) => [...prev, `[${actionName}] Initiating Attempt ${attempt}...`]);
+          await execute();
+        } else {
+          setOauthRetryLogs((prev) => [
+            ...prev,
+            `❌ Critical: All ${oauthMaxAttempts} attempts exhausted. Handshake aborted.`
+          ]);
+          setOauthIsRetrying(false);
+          setOauthRetryAttempt(0);
+          onFailure(new Error(`All ${oauthMaxAttempts} handshake attempts failed. Last error: ${errMsg}`));
+        }
+      }
+    };
+
+    await execute();
+  };
+
+  const handleToggleZoom = (val: boolean) => {
+    if (!val) {
+      setZoomConnected(false);
+      localStorage.setItem("spark_zoom_connected", "false");
+    } else {
+      setOauthPlatform("zoom");
+      setOauthStep(1);
+      setOauthCode("");
+      setOauthTokenResponse(null);
+      setOauthError(null);
+      setOauthRetryLogs([]);
+      setOauthModalOpen(true);
+    }
+  };
+
+  const handleToggleGoogle = (val: boolean) => {
+    if (!val) {
+      setGoogleConnected(false);
+      localStorage.setItem("spark_google_connected", "false");
+    } else {
+      setOauthPlatform("google");
+      setOauthStep(1);
+      setOauthCode("");
+      setOauthTokenResponse(null);
+      setOauthError(null);
+      setOauthRetryLogs([]);
+      setOauthModalOpen(true);
+    }
+  };
+
+  const handleOAuthAuthorize = async () => {
+    setOauthLoading(true);
+    setOauthError(null);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const generatedCode = `spl_${oauthPlatform}_code_${Math.random().toString(36).substring(2, 10)}`;
+      setOauthCode(generatedCode);
+      setOauthStep(2);
+    } catch (err: any) {
+      setOauthError(err.message || "Failed to authorize OAuth request.");
+    } finally {
+      setOauthLoading(false);
+    }
+  };
+
+  const handleSimulateCallback = async () => {
+    setOauthLoading(true);
+    setOauthError(null);
+    setOauthRetryLogs([]);
+
+    await fetchWithRetry(
+      () => fetch(`/api/v1/oauth/callback?code=${oauthCode}&state=xyz_state_4917&platform=${oauthPlatform}`),
+      async (data) => {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        setOauthStep(3);
+        setOauthLoading(false);
+      },
+      (err) => {
+        setOauthError(err.message || "OAuth callback simulator failed.");
+        setOauthLoading(false);
+      },
+      "OAuth Browser Callback"
+    );
+  };
+
+  const handleExchangeTokens = async () => {
+    setOauthLoading(true);
+    setOauthError(null);
+    setOauthRetryLogs([]);
+
+    await fetchWithRetry(
+      () => fetch("/api/v1/oauth/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          code: oauthCode,
+          client_id: `spark_client_id_${oauthPlatform}`,
+          client_secret: `spark_client_secret_${oauthPlatform}_f8b44ece36e877f8`,
+          grant_type: "authorization_code",
+          platform: oauthPlatform
+        })
+      }),
+      async (data) => {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        setOauthTokenResponse(data);
+        setOauthStep(4);
+        
+        if (oauthPlatform === "zoom") {
+          setZoomConnected(true);
+          localStorage.setItem("spark_zoom_connected", "true");
+        } else {
+          setGoogleConnected(true);
+          localStorage.setItem("spark_google_connected", "true");
+        }
+        setOauthLoading(false);
+      },
+      (err) => {
+        setOauthError(err.message || "Token exchange simulator failed.");
+        setOauthLoading(false);
+      },
+      "Secure Token Exchange"
+    );
+  };
+
+  // Tenant Data Tab States
+  const [selectedTenantDataId, setSelectedTenantDataId] = useState<string>("");
+  const [activeTenantFiles, setActiveTenantFiles] = useState<any[]>([]);
+  const [isTenantDataDirty, setIsTenantDataDirty] = useState<boolean>(false);
+  const [tenantDataSearch, setTenantDataSearch] = useState<string>("");
+  const [newS3FileName, setNewS3FileName] = useState<string>("");
+  const [newS3FileType, setNewS3FileType] = useState<string>("material");
+  const [newS3FileDesc, setNewS3FileDesc] = useState<string>("");
+  const [newS3FileDirective, setNewS3FileDirective] = useState<string>("");
+  const [newS3FileUrl, setNewS3FileUrl] = useState<string>("");
+  const [isSavingTenantData, setIsSavingTenantData] = useState<boolean>(false);
 
   // Customers / Tenants state
   const [customersList, setCustomersList] = useState<CustomerTenant[]>([]);
@@ -438,6 +941,7 @@ export default function SupportDashboard({
 
   // Customer Manager state variables
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("Tenant_ID_104");
+  const [custProvisionType, setCustProvisionType] = useState<"customer" | "spark_admin">("customer");
   const [custCompanyName, setCustCompanyName] = useState<string>("");
   const [custTenantId, setCustTenantId] = useState<string>("");
   const [custEmail, setCustEmail] = useState<string>("");
@@ -449,6 +953,7 @@ export default function SupportDashboard({
   const [custState, setCustState] = useState<string>("");
   const [custZipCode, setCustZipCode] = useState<string>("");
   const [custSearch, setCustSearch] = useState<string>("");
+  const [custStatusFilter, setCustStatusFilter] = useState<"All" | "Active" | "Invited" | "Not Invited">("All");
   const [isCreatingNewCust, setIsCreatingNewCust] = useState<boolean>(false);
 
   // New state variables for Portal assignments, subdomain configuration & activation workflow
@@ -475,9 +980,30 @@ export default function SupportDashboard({
   const [smtpPort, setSmtpPort] = useState<string>("587");
   const [smtpUser, setSmtpUser] = useState<string>("");
   const [smtpPass, setSmtpPass] = useState<string>("");
+  const [showSmtpPass, setShowSmtpPass] = useState<boolean>(false);
   const [selectedEmailMode, setSelectedEmailMode] = useState<'sandbox' | 'sdk' | 'smtp'>('sandbox');
   const [awsEnvStatus, setAwsEnvStatus] = useState<any>(null);
   const [isAwsEnvStatusChecked, setIsAwsEnvStatusChecked] = useState<boolean>(false);
+
+  // Global Users & Admins state from Firestore
+  const [globalUsersList, setGlobalUsersList] = useState<any[]>([]);
+  const [adminLookupQuery, setAdminLookupQuery] = useState<string>("");
+  const [adminLookupFilter, setAdminLookupFilter] = useState<"All" | "Admins" | "SparkAdmins" | "Users">("All");
+
+  useEffect(() => {
+    console.log("[Firestore Sync] Setting up real-time listener for users collection...");
+    const unsub = onSnapshot(collection(db, "users"), (snapshot) => {
+      const loadedUsers: any[] = [];
+      snapshot.forEach((docSnap) => {
+        loadedUsers.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      setGlobalUsersList(loadedUsers);
+      console.log(`[Firestore Sync] Loaded ${loadedUsers.length} system users/admins from Firestore.`);
+    }, (err) => {
+      console.warn("[Firestore Sync] Users subscription warning:", err);
+    });
+    return () => unsub();
+  }, []);
 
   // Fetch AWS SES environmental status from our backend
   const fetchAwsSesStatus = async () => {
@@ -536,6 +1062,107 @@ export default function SupportDashboard({
     }
   };
 
+  const handleSelectTenantForData = (tenantId: string) => {
+    const tenant = customersList.find(c => c.id === tenantId);
+    if (tenant) {
+      setSelectedTenantDataId(tenantId);
+      setIsTenantDataDirty(false);
+      if (tenant.s3Files && Array.isArray(tenant.s3Files)) {
+        setActiveTenantFiles(tenant.s3Files);
+      } else {
+        const tenantSubdomain = (tenant.subdomain || "default").toLowerCase();
+        const mappedDefault = DEFAULT_S3_FILES.map(file => ({
+          ...file,
+          s3Uri: `s3://spark-tenant-data-${tenantSubdomain}/${file.type}s/${file.name.toLowerCase().replace(/[^a-z0-9]/g, "_")}`
+        }));
+        setActiveTenantFiles(mappedDefault);
+      }
+    } else {
+      setSelectedTenantDataId("");
+      setActiveTenantFiles([]);
+      setIsTenantDataDirty(false);
+    }
+  };
+
+  const handleAttachLocalS3File = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newS3FileName.trim()) {
+      setToast({ message: "Please specify a document name before attaching.", type: "error" });
+      return;
+    }
+    const tenant = customersList.find(c => c.id === selectedTenantDataId);
+    if (!tenant) return;
+
+    const tenantSubdomain = (tenant.subdomain || "default").toLowerCase();
+    const typeLabel = newS3FileType.toLowerCase().replace(/[^a-z0-9]/g, "_");
+    const safeName = newS3FileName.trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
+
+    const newFile = {
+      id: `kb-asset-${Date.now()}`,
+      name: newS3FileName.trim(),
+      type: newS3FileType,
+      url: newS3FileUrl.trim() || `https://sparkanalytic.com/secure/${safeName}.pdf`,
+      description: newS3FileDesc.trim() || "Uploaded tenant compliance resource",
+      directive: newS3FileDirective.trim() || "Verify compliance with tenant sales standards.",
+      uploadedAt: new Date().toISOString(),
+      size: `${(Math.random() * 3 + 0.2).toFixed(1)} MB`,
+      status: "synced",
+      s3Uri: `s3://spark-tenant-data-${tenantSubdomain}/${typeLabel}/${safeName}.pdf`
+    };
+
+    setActiveTenantFiles([newFile, ...activeTenantFiles]);
+    setIsTenantDataDirty(true);
+    setNewS3FileName("");
+    setNewS3FileDesc("");
+    setNewS3FileDirective("");
+    setNewS3FileUrl("");
+    setToast({ message: "Document attached to local staging space. Remember to press 'Save Changes' to commit to S3.", type: "success" });
+  };
+
+  const handleDeleteLocalS3File = (fileId: string) => {
+    setActiveTenantFiles(activeTenantFiles.filter(f => f.id !== fileId));
+    setIsTenantDataDirty(true);
+    setToast({ message: "Document removed from staging. Click 'Save' to apply changes.", type: "info" });
+  };
+
+  const handleSaveTenantData = async () => {
+    if (!selectedTenantDataId) return;
+    const tenant = customersList.find(c => c.id === selectedTenantDataId);
+    if (!tenant) return;
+
+    setIsSavingTenantData(true);
+    try {
+      const tenantRef = doc(db, "tenants", selectedTenantDataId);
+      await updateDoc(tenantRef, { s3Files: activeTenantFiles });
+      setIsTenantDataDirty(false);
+      setToast({
+        message: `Changes saved successfully to tenant ${tenant.companyName}. s3://spark-tenant-data-${(tenant.subdomain || "default").toLowerCase()}/ is synced.`,
+        type: "success"
+      });
+    } catch (err: any) {
+      console.error("Failed to update tenant S3 files in Firestore:", err);
+      setToast({
+        message: "Failed to update S3 tenant data. Verify your Firestore schema configurations.",
+        type: "error"
+      });
+    } finally {
+      setIsSavingTenantData(false);
+    }
+  };
+
+  const computeActiveFilesTotalSize = () => {
+    let totalMb = 0;
+    activeTenantFiles.forEach(f => {
+      if (!f.size) return;
+      if (f.size.includes("MB")) {
+        totalMb += parseFloat(f.size);
+      } else if (f.size.includes("KB")) {
+        totalMb += parseFloat(f.size) / 1024;
+      }
+    });
+    return totalMb.toFixed(2);
+  };
+
   const handleDispatchEmail = async () => {
     setSimulatedEmailStatus('sending');
     setEmailLogs([`[System] Starting dispatch workflow in '${selectedEmailMode.toUpperCase()}' mode...`]);
@@ -556,7 +1183,7 @@ export default function SupportDashboard({
         setSimulatedEmailStatus('sent');
         setToast({ message: `Simulated invitation successfully dispatched to ${custEmail}!`, type: "success" });
         // Save user invitation to firestore
-        saveUserInvitationToFirestore(custEmail, selectedCustomerId || custTenantId, "tenant_admin", "invited");
+        saveUserInvitationToFirestore(custEmail, selectedCustomerId || custTenantId, "tenant_super_admin", "invited");
       }, 1500);
     } else {
       try {
@@ -603,7 +1230,7 @@ export default function SupportDashboard({
           setToast({ message: `Live AWS SES email successfully dispatched to ${custEmail}!`, type: "success" });
           fetchAwsSesStatus(); // refresh status
           // Save user invitation to firestore
-          saveUserInvitationToFirestore(custEmail, selectedCustomerId || custTenantId, "tenant_admin", "invited");
+          saveUserInvitationToFirestore(custEmail, selectedCustomerId || custTenantId, "tenant_super_admin", "invited");
         } else {
           setSimulatedEmailStatus('idle');
           setToast({ message: data.error || "Failed to send live AWS SES email.", type: "error" });
@@ -643,6 +1270,34 @@ export default function SupportDashboard({
     }
   }, [selectedCustomerId, customersList, isCreatingNewCust]);
 
+  const handleInitNewTenant = () => {
+    setIsCreatingNewCust(true);
+    setSelectedCustomerId("");
+    setCustCompanyName("");
+    const numericIds = customersList
+      .map(c => {
+        const match = c.id.match(/Tenant_ID_(\d+)/);
+        return match ? parseInt(match[1], 10) : 0;
+      })
+      .filter(num => num >= 101);
+    const maxId = numericIds.length > 0 ? Math.max(...numericIds) : 100;
+    setCustTenantId(`Tenant_ID_${maxId + 1}`);
+    setCustEmail("");
+    setCustSecondEmail("");
+    setCustPhone("");
+    setCustAddress1("");
+    setCustAddress2("");
+    setCustCity("");
+    setCustState("");
+    setCustZipCode("");
+    setCustSubdomain("");
+    setCustCustPortalAssigned(true);
+    setCustPerfPortalAssigned(true);
+    setCustActivationToken("");
+    setCustTempPassword("");
+    setCustActivationStatus("Not Invited");
+  };
+
   // Automatically generate invitation & temporary credentials when a new customer email is entered during customer creation
   useEffect(() => {
     if (isCreatingNewCust) {
@@ -673,6 +1328,7 @@ export default function SupportDashboard({
 
   // Secure Authentication States
   const [authUser, setAuthUser] = useState<any>(() => {
+    if (parentAuthUser) return parentAuthUser;
     try {
       const stored = localStorage.getItem("spark_support_local_user");
       if (stored) return JSON.parse(stored);
@@ -687,16 +1343,27 @@ export default function SupportDashboard({
   const [authLoading, setAuthLoading] = useState<boolean>(false);
   const [showAuthHelp, setShowAuthHelp] = useState<boolean>(false);
 
-  // Sync auth state
+  // Sync auth state with parent authUser
+  useEffect(() => {
+    if (parentAuthUser) {
+      setAuthUser(parentAuthUser);
+    }
+  }, [parentAuthUser]);
+
+  // Sync auth state with firebase auth changed
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (parentAuthUser) {
+        setAuthUser(parentAuthUser);
+        return;
+      }
       const stored = localStorage.getItem("spark_support_local_user");
       if (!stored) {
         setAuthUser(user);
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [parentAuthUser]);
 
   const handleLocalBypass = (name: string = "Senior Support Representative", email: string = "support.agent@spark.com") => {
     const mockUser = {
@@ -724,14 +1391,18 @@ export default function SupportDashboard({
       return;
     }
 
-    const isMasterAdmin = authEmail.trim().toLowerCase() === "tom@sparkanalytic.com" && authPassword === "BoatBuilder2026!";
+    const normalizedEmail = authEmail.trim().toLowerCase();
+    const isMasterAdmin = (normalizedEmail === "tom@sparkanalytic.com" || normalizedEmail === "clay@sparkanalytic.com") && (authPassword === "BoatBuilder2026!" || authPassword === "SparkSecure2026!");
 
     if (isMasterAdmin) {
+      const isClay = normalizedEmail === "clay@sparkanalytic.com";
+      const uid = isClay ? "master-admin-uid-clay" : "master-admin-uid-tom-hansen";
+      const name = isClay ? "Clay Malcolm" : "Tom Hansen";
       const masterUser = {
-        uid: "master-admin-uid-tom-hansen",
-        name: "Tom Hansen",
-        displayName: "Tom Hansen",
-        email: "tom@sparkanalytic.com",
+        uid,
+        name,
+        displayName: name,
+        email: normalizedEmail,
         tenant_id: "tenant-master-admin",
         role: "tenant_admin",
         companyName: "Spark Master Admin Workspace",
@@ -739,9 +1410,9 @@ export default function SupportDashboard({
 
       // Try seeding Firestore
       try {
-        await setDoc(doc(db, "users", "master-admin-uid-tom-hansen"), {
-          email: "tom@sparkanalytic.com",
-          name: "Tom Hansen",
+        await setDoc(doc(db, "users", uid), {
+          email: normalizedEmail,
+          name,
           tenant_id: "tenant-master-admin",
           role: "tenant_admin",
           enrollment_status: "active",
@@ -758,14 +1429,14 @@ export default function SupportDashboard({
 
       // Best-effort auth
       try {
-        await createUserWithEmailAndPassword(auth, "tom@sparkanalytic.com", "BoatBuilder2026!");
+        await createUserWithEmailAndPassword(auth, normalizedEmail, authPassword);
         if (auth.currentUser) {
-          await updateProfile(auth.currentUser, { displayName: "Tom Hansen" });
+          await updateProfile(auth.currentUser, { displayName: name });
         }
       } catch (authErr: any) {
         if (authErr.code === "auth/email-already-in-use") {
           try {
-            await signInWithEmailAndPassword(auth, "tom@sparkanalytic.com", "BoatBuilder2026!");
+            await signInWithEmailAndPassword(auth, normalizedEmail, authPassword);
           } catch (signInErr) {
             console.warn("Firebase sign in failed:", signInErr);
           }
@@ -779,35 +1450,18 @@ export default function SupportDashboard({
       return;
     }
 
-    if (authMode === "register" && !agentName.trim()) {
-      setAuthError("Agent Name is required for registration.");
-      setAuthLoading(false);
-      return;
-    }
-
     try {
-      if (authMode === "login") {
-        await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
-      } else {
-        const userCred = await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword);
-        if (userCred.user) {
-          await updateProfile(userCred.user, { displayName: agentName.trim() });
-        }
-      }
+      await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
       localStorage.removeItem("spark_support_local_user");
     } catch (err: any) {
       console.error("Auth action failed:", err);
-      let msg = err.message || "An authentication error occurred.";
       if (err.code === "auth/operation-not-allowed") {
-        // Automatically fall back to local bypass in dev/preview environment since Email/Password is not enabled
-        handleLocalBypass(agentName.trim() || "Support Representative", authEmail.trim());
+        handleLocalBypass(authEmail.split("@")[0] || "Support Admin", authEmail.trim());
         return;
-      } else if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+      }
+      let msg = err.message || "An authentication error occurred.";
+      if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
         msg = "Invalid email or password combination.";
-      } else if (err.code === "auth/email-already-in-use") {
-        msg = "This email is already registered.";
-      } else if (err.code === "auth/weak-password") {
-        msg = "Password must be at least 6 characters long.";
       } else if (err.code === "auth/invalid-email") {
         msg = "Please enter a valid email address.";
       }
@@ -1417,13 +2071,11 @@ export default function SupportDashboard({
               <div className="flex items-center gap-2 text-rose-400">
                 <LockKeyhole className="w-5 h-5" />
                 <h2 className="text-lg font-bold tracking-tight text-slate-100">
-                  {authMode === "login" ? "Agent Authentication" : "Register Support Agent"}
+                  Support Center Authentication
                 </h2>
               </div>
               <p className="text-xs text-slate-400 leading-relaxed">
-                {authMode === "login" 
-                  ? "Enter your secure credentials to verify your active support agent profile." 
-                  : "Create a secure account to register as an authorized support representative."}
+                Enter your secure credentials to verify your active support agent profile.
               </p>
             </div>
 
@@ -1441,71 +2093,7 @@ export default function SupportDashboard({
               </motion.div>
             )}
 
-            {showAuthHelp && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 space-y-3 text-xs text-amber-200"
-              >
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
-                  <div className="space-y-0.5">
-                    <div className="font-bold uppercase tracking-wider text-amber-300">Firebase Auth Provider Required</div>
-                    <p className="text-[10px] text-amber-400/90 leading-relaxed">
-                      To run production Email/Password identity verification, enable the provider in your Firebase project.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="space-y-1.5 text-[9px] bg-slate-950/60 p-3 rounded-xl border border-slate-850/60 font-mono">
-                  <div className="text-slate-300 font-bold uppercase border-b border-slate-800/85 pb-1 mb-1 flex items-center gap-1.5">
-                    <Fingerprint className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Enable Email/Password Auth:</span>
-                  </div>
-                  <ol className="list-decimal list-inside space-y-0.5 text-slate-400">
-                    <li>Open your <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="text-amber-400 hover:underline underline-offset-2">Firebase Console</a></li>
-                    <li>Go to <span className="text-amber-300">Authentication &gt; Sign-in method</span></li>
-                    <li>Add/Edit <span className="text-amber-300">Email/Password</span> and click <span className="text-amber-300">Enable</span></li>
-                  </ol>
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => handleLocalBypass("Senior Support Representative", "support.agent@spark.com")}
-                    className="flex-1 bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 hover:text-amber-300 border border-amber-500/30 font-bold text-[10px] py-1.5 px-3 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1"
-                  >
-                    <ShieldCheck className="w-3 h-3" />
-                    <span>Bypass with Local Dev-Session</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowAuthHelp(false)}
-                    className="text-slate-400 hover:text-slate-300 text-[9px] font-bold px-2 py-1.5 cursor-pointer transition-all uppercase font-mono"
-                  >
-                    Close Guide
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
             <form onSubmit={handleAuthAction} className="space-y-4">
-              {authMode === "register" && (
-                <div className="space-y-1">
-                  <label className="block text-[10px] font-bold font-mono text-slate-400 uppercase">Agent Profile Name *</label>
-                  <div className="relative">
-                    <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                    <input
-                      type="text"
-                      placeholder="e.g. Tia Norma"
-                      value={agentName}
-                      onChange={(e) => setAgentName(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-850 hover:border-slate-800 focus:border-rose-500/55 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-200 focus:outline-none transition-all font-sans"
-                    />
-                  </div>
-                </div>
-              )}
-
               <div className="space-y-1">
                 <label className="block text-[10px] font-bold font-mono text-slate-400 uppercase">Authorized Email address *</label>
                 <div className="relative">
@@ -1534,11 +2122,11 @@ export default function SupportDashboard({
                 </div>
               </div>
 
-              <div className="pt-2 flex flex-col sm:flex-row gap-3">
+              <div className="pt-2">
                 <button
                   type="submit"
                   disabled={authLoading}
-                  className="flex-1 bg-rose-600 hover:bg-rose-500 disabled:bg-rose-800 text-white font-bold text-xs py-2.5 rounded-xl transition-all cursor-pointer shadow-lg shadow-rose-600/15 flex items-center justify-center gap-1.5"
+                  className="w-full bg-rose-600 hover:bg-rose-500 disabled:bg-rose-800 text-white font-bold text-xs py-2.5 rounded-xl transition-all cursor-pointer shadow-lg shadow-rose-600/15 flex items-center justify-center gap-1.5"
                 >
                   {authLoading ? (
                     <>
@@ -1548,39 +2136,15 @@ export default function SupportDashboard({
                   ) : (
                     <>
                       <LockKeyhole className="w-3.5 h-3.5" />
-                      <span>{authMode === "login" ? "AUTHENTICATE AGENT" : "REGISTER SECURE RECIPIENT"}</span>
+                      <span>AUTHENTICATE AGENT</span>
                     </>
                   )}
-                </button>
-
-                <button
-                  type="button"
-                  disabled={authLoading}
-                  onClick={handleQuickTestAccess}
-                  className="bg-slate-950 hover:bg-slate-900 border border-slate-800 text-rose-400 font-bold text-xs py-2.5 px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                  title="One-click bypass using preset developer credential token"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>QUICK AGENT ACCESS</span>
                 </button>
               </div>
             </form>
 
-            <div className="pt-4 border-t border-slate-800/60 flex items-center justify-between text-xs">
-              <span className="text-slate-500">
-                {authMode === "login" ? "No secure support agent profile?" : "Already registered?"}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode(authMode === "login" ? "register" : "login");
-                  setAuthError(null);
-                  setShowAuthHelp(false);
-                }}
-                className="text-rose-400 hover:text-rose-300 font-bold transition-all cursor-pointer"
-              >
-                {authMode === "login" ? "Register New Profile" : "Switch to Login"}
-              </button>
+            <div className="pt-4 border-t border-slate-800/60 text-center text-xs text-slate-500 leading-relaxed">
+              Support Agent profile registration is restricted. Profiles must be provisioned by a Master System Administrator.
             </div>
           </div>
         </motion.div>
@@ -1843,6 +2407,40 @@ export default function SupportDashboard({
                 </div>
                 <span className="text-[10px] bg-blue-500/10 text-blue-400 px-1.5 py-0.5 rounded font-mono font-bold">
                   {sessions.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveSupportTab("tenant-data")}
+                className={`w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                  activeSupportTab === "tenant-data"
+                    ? "bg-slate-800 text-slate-100 shadow-sm border border-slate-700/50"
+                    : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/40"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-emerald-400" />
+                  <span>Tenant Data</span>
+                </div>
+                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded font-mono font-bold">
+                  S3
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveSupportTab("integrations")}
+                className={`w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                  activeSupportTab === "integrations"
+                    ? "bg-slate-800 text-slate-100 shadow-sm border border-slate-700/50"
+                    : "text-slate-400 hover:text-slate-100 hover:bg-slate-800/40"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-emerald-400" />
+                  <span>Platform Integrations</span>
+                </div>
+                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded font-mono font-bold">
+                  5
                 </span>
               </button>
             </nav>
@@ -2539,33 +3137,7 @@ export default function SupportDashboard({
 
                     {/* Action "New" Customer button */}
                     <button
-                      onClick={() => {
-                        setIsCreatingNewCust(true);
-                        setSelectedCustomerId("");
-                        setCustCompanyName("");
-                        const numericIds = customersList
-                          .map(c => {
-                            const match = c.id.match(/Tenant_ID_(\d+)/);
-                            return match ? parseInt(match[1], 10) : 0;
-                          })
-                          .filter(num => num >= 101);
-                        const maxId = numericIds.length > 0 ? Math.max(...numericIds) : 100;
-                        setCustTenantId(`Tenant_ID_${maxId + 1}`);
-                        setCustEmail("");
-                        setCustSecondEmail("");
-                        setCustPhone("");
-                        setCustAddress1("");
-                        setCustAddress2("");
-                        setCustCity("");
-                        setCustState("");
-                        setCustZipCode("");
-                        setCustSubdomain("");
-                        setCustCustPortalAssigned(true);
-                        setCustPerfPortalAssigned(true);
-                        setCustActivationToken("");
-                        setCustTempPassword("");
-                        setCustActivationStatus("Not Invited");
-                      }}
+                      onClick={handleInitNewTenant}
                       className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-2 shadow-md shadow-rose-600/10 cursor-pointer"
                     >
                       <Plus className="w-4 h-4" />
@@ -2574,28 +3146,48 @@ export default function SupportDashboard({
                   </div>
                 </div>
 
+
                 {/* Main section: Left split column (Search and list), Right split column (Details & Form) */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   
                   {/* Left Column: List and Search */}
                   <div className="space-y-4">
-                    <div className="relative">
-                      <input
-                        type="text"
-                        placeholder="Search customers..."
-                        value={custSearch}
-                        onChange={(e) => setCustSearch(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-slate-700 focus:outline-none rounded-xl pl-9 pr-3 py-2 text-xs text-slate-300 font-mono"
-                      />
-                      <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type="text"
+                          placeholder="Search tenants..."
+                          value={custSearch}
+                          onChange={(e) => setCustSearch(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-slate-700 focus:outline-none rounded-xl pl-9 pr-3 py-2 text-xs text-slate-300 font-mono"
+                        />
+                        <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                      </div>
+                      <select
+                        value={custStatusFilter}
+                        onChange={(e) => setCustStatusFilter(e.target.value as any)}
+                        className="bg-slate-950 border border-slate-800 focus:border-slate-700 focus:outline-none rounded-xl px-2 py-2 text-[11px] text-slate-400 font-mono"
+                      >
+                        <option value="All">All Statuses</option>
+                        <option value="Active">Active</option>
+                        <option value="Invited">Invited</option>
+                        <option value="Not Invited">Not Invited</option>
+                      </select>
                     </div>
 
                     <div className="space-y-2 max-h-[480px] overflow-y-auto pr-2 scrollbar-none">
                       {customersList
-                        .filter(c => 
-                          (c.companyName || "").toLowerCase().includes((custSearch || "").toLowerCase()) || 
-                          (c.id || "").toLowerCase().includes((custSearch || "").toLowerCase())
-                        )
+                        .filter(c => {
+                          const matchesSearch = 
+                            (c.companyName || "").toLowerCase().includes((custSearch || "").toLowerCase()) || 
+                            (c.id || "").toLowerCase().includes((custSearch || "").toLowerCase()) ||
+                            (c.subdomain || "").toLowerCase().includes((custSearch || "").toLowerCase()) ||
+                            (c.email || "").toLowerCase().includes((custSearch || "").toLowerCase());
+                          const matchesStatus = 
+                            custStatusFilter === "All" || 
+                            c.activationStatus === custStatusFilter;
+                          return matchesSearch && matchesStatus;
+                        })
                         .map(c => (
                           <div
                             key={c.id}
@@ -2610,11 +3202,25 @@ export default function SupportDashboard({
                             }`}
                           >
                             <div className="space-y-1">
-                              <h4 className="text-xs font-bold text-slate-200">{c.companyName}</h4>
+                              <div className="flex items-center gap-1.5">
+                                <h4 className="text-xs font-bold text-slate-200">{c.companyName}</h4>
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  c.activationStatus === "Active" 
+                                    ? "bg-emerald-400" 
+                                    : c.activationStatus === "Invited" 
+                                      ? "bg-amber-400" 
+                                      : "bg-slate-600"
+                                }`} title={c.activationStatus || "Not Invited"} />
+                              </div>
                               <div className="flex items-center gap-2 text-[10px] font-mono text-slate-500">
                                 <span className="bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded text-rose-400 font-bold">
                                   {c.id}
                                 </span>
+                                {c.subdomain && (
+                                  <span className="text-[9px] text-slate-500 truncate max-w-[100px]">
+                                    {c.subdomain}
+                                  </span>
+                                )}
                               </div>
                             </div>
                             
@@ -2650,12 +3256,19 @@ export default function SupportDashboard({
                             </button>
                           </div>
                         ))}
-                      {customersList.filter(c => 
-                        (c.companyName || "").toLowerCase().includes((custSearch || "").toLowerCase()) || 
-                        (c.id || "").toLowerCase().includes((custSearch || "").toLowerCase())
-                      ).length === 0 && (
+                      {customersList.filter(c => {
+                        const matchesSearch = 
+                          (c.companyName || "").toLowerCase().includes((custSearch || "").toLowerCase()) || 
+                          (c.id || "").toLowerCase().includes((custSearch || "").toLowerCase()) ||
+                          (c.subdomain || "").toLowerCase().includes((custSearch || "").toLowerCase()) ||
+                          (c.email || "").toLowerCase().includes((custSearch || "").toLowerCase());
+                        const matchesStatus = 
+                          custStatusFilter === "All" || 
+                          c.activationStatus === custStatusFilter;
+                        return matchesSearch && matchesStatus;
+                      }).length === 0 && (
                         <div className="text-center py-8 text-slate-500 text-xs italic">
-                          No customers match search.
+                          No customers match criteria.
                         </div>
                       )}
                     </div>
@@ -2664,16 +3277,23 @@ export default function SupportDashboard({
                   {/* Right Column: Form Editor / Detail view */}
                   <div className="lg:col-span-2 bg-slate-950 rounded-xl border border-slate-800 p-5 flex flex-col justify-between space-y-4">
                     {!isCreatingNewCust && !selectedCustomerId ? (
-                      <div className="flex flex-col items-center justify-center py-24 text-center space-y-4 my-auto">
+                      <div className="flex flex-col items-center justify-center py-24 text-center space-y-5 my-auto">
                         <div className="p-4 bg-slate-900 border border-slate-850 rounded-2xl text-slate-500 animate-pulse">
                           <Users className="w-8 h-8 text-rose-500/80" />
                         </div>
                         <div className="space-y-1">
                           <h3 className="text-sm font-bold text-slate-200">No Active Tenant Selected</h3>
                           <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
-                            Please select a customer from the list on the left to edit their details, or click <strong className="text-rose-400">"New Customer"</strong> to register a brand new tenant profile.
+                            Please select a customer from the list on the left to edit their details, or click below to register a brand new tenant profile.
                           </p>
                         </div>
+                        <button
+                          onClick={handleInitNewTenant}
+                          className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-[11px] font-bold py-2 px-5 rounded-xl transition-all flex items-center gap-1.5 shadow-md shadow-rose-600/10 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Register New Tenant</span>
+                        </button>
                       </div>
                     ) : (
                       <>
@@ -2682,10 +3302,75 @@ export default function SupportDashboard({
                         <span className="text-xs font-bold text-slate-200 font-mono">
                           {isCreatingNewCust ? "⚡ REGISTER NEW TENANT CUSTOMER" : `📝 EDIT CLIENT TENANT DETAILS`}
                         </span>
-                        {!isCreatingNewCust && (
-                          <span className="text-[10px] bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded font-mono font-bold uppercase">
-                            Active Tenant Profile
+                        {!isCreatingNewCust ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={handleInitNewTenant}
+                              className="bg-rose-600/15 hover:bg-rose-600/25 text-rose-400 border border-rose-500/20 hover:border-rose-500/30 text-[10px] font-mono font-bold px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1"
+                              title="Register a new client tenant profile"
+                            >
+                              <Plus className="w-3 h-3" />
+                              <span>Add Tenant</span>
+                            </button>
+                            <span className="text-[10px] bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded font-mono font-bold uppercase">
+                              Active Tenant Profile
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded font-mono font-bold uppercase">
+                            New Registration
                           </span>
+                        )}
+                      </div>
+
+                      {/* Account Classification / Provisioning Level */}
+                      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-2">
+                        <label className="text-[10px] text-slate-400 font-mono font-bold uppercase tracking-wider block">
+                          Provisioning Type & Role Classification
+                        </label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCustProvisionType("customer");
+                              if (custCompanyName === "Spark System Workspace") setCustCompanyName("");
+                              if (custTenantId === "tenant-master-admin") setCustTenantId("");
+                            }}
+                            className={`flex items-center justify-center gap-2 p-2 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer ${
+                              custProvisionType === "customer"
+                                ? "bg-rose-600/20 border-rose-500/40 text-rose-300"
+                                : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            <Building className="w-3.5 h-3.5" />
+                            <span>🏢 Customer Tenant User</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCustProvisionType("spark_admin");
+                              setCustCompanyName("Spark System Workspace");
+                              setCustTenantId("tenant-master-admin");
+                            }}
+                            className={`flex items-center justify-center gap-2 p-2 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer ${
+                              custProvisionType === "spark_admin"
+                                ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
+                                : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            <Shield className="w-3.5 h-3.5 text-amber-400" />
+                            <span>🛡️ Spark System Admin</span>
+                          </button>
+                        </div>
+
+                        {custProvisionType === "spark_admin" && (
+                          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 rounded-xl p-2.5 text-[11px] font-mono flex items-center gap-2">
+                            <Shield className="w-4 h-4 text-amber-400 shrink-0" />
+                            <span>
+                              <strong>Global Spark Admin:</strong> User is automatically provisioned under <code>tenant-master-admin</code>. No customer tenant ID can be assigned.
+                            </span>
+                          </div>
                         )}
                       </div>
 
@@ -2722,17 +3407,23 @@ export default function SupportDashboard({
 
                         {/* Email Address */}
                         <div className="space-y-1.5">
-                          <label className="text-[10px] text-slate-500 font-mono font-bold uppercase">Email Address</label>
+                          <label className="text-[10px] text-slate-400 font-mono font-bold uppercase flex items-center gap-1">
+                            <span>First Invitee / Tenant Admin Email</span>
+                            <span className="text-rose-400 animate-pulse">*</span>
+                          </label>
                           <div className="relative">
                             <input
                               type="email"
                               value={custEmail}
                               onChange={(e) => setCustEmail(e.target.value)}
-                              placeholder="e.g. support@company.com"
+                              placeholder="e.g. admin@company.com"
                               className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-slate-700"
                             />
                             <Mail className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
                           </div>
+                          <span className="text-[9px] text-slate-500 font-mono leading-tight block mt-0.5">
+                            This recipient will receive the initial enrollment invitation and become the default Admin for the new tenant.
+                          </span>
                         </div>
 
                         {/* 2nd Email Address */}
@@ -3171,7 +3862,7 @@ export default function SupportDashboard({
                                          <div className="space-y-1">
                                            <label className="text-[8px] text-slate-500 font-mono uppercase block">SMTP Username</label>
                                            <input
-                                             type="password"
+                                             type="text"
                                              value={smtpUser}
                                              onChange={(e) => setSmtpUser(e.target.value)}
                                              placeholder={awsEnvStatus?.hasSmtpUsername ? "•••••••••••• (Using Env Var)" : "SMTP Username..."}
@@ -3180,13 +3871,24 @@ export default function SupportDashboard({
                                          </div>
                                          <div className="space-y-1">
                                            <label className="text-[8px] text-slate-500 font-mono uppercase block">SMTP Password</label>
-                                           <input
-                                             type="password"
-                                             value={smtpPass}
-                                             onChange={(e) => setSmtpPass(e.target.value)}
-                                             placeholder={awsEnvStatus?.hasSmtpPassword ? "•••••••••••• (Using Env Var)" : "SMTP Password..."}
-                                             className="w-full bg-slate-950 border border-slate-850 rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-amber-500 font-mono"
-                                           />
+                                           <div className="relative">
+                                             <input
+                                               type={showSmtpPass ? "text" : "password"}
+                                               value={smtpPass}
+                                               onChange={(e) => setSmtpPass(e.target.value)}
+                                               placeholder={awsEnvStatus?.hasSmtpPassword ? "•••••••••••• (Using Env Var)" : "SMTP Password..."}
+                                               className="w-full bg-slate-950 border border-slate-850 rounded-lg pl-2 pr-8 py-1 text-slate-300 focus:outline-none focus:border-amber-500 font-mono"
+                                             />
+                                             <button
+                                               type="button"
+                                               onClick={() => setShowSmtpPass(!showSmtpPass)}
+                                               className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors flex items-center justify-center"
+                                               style={{ height: '20px', width: '20px' }}
+                                               title={showSmtpPass ? "Hide Password" : "Show Password"}
+                                             >
+                                               {showSmtpPass ? <EyeOff size={12} /> : <Eye size={12} />}
+                                             </button>
+                                           </div>
                                          </div>
                                          <div className="space-y-1 sm:col-span-2">
                                            <label className="text-[8px] text-slate-500 font-mono uppercase block">Sender Email Address</label>
@@ -3482,7 +4184,7 @@ export default function SupportDashboard({
                                     body: JSON.stringify({
                                       email: custEmail.trim(),
                                       tenantId: custTenantId.trim(),
-                                      role: "tenant_admin",
+                                      role: "tenant_super_admin",
                                       origin: window.location.origin,
                                       temporaryPassword: finalTempPass,
                                       enrollmentToken: finalToken,
@@ -3532,18 +4234,18 @@ export default function SupportDashboard({
                             }}
                             className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-[10px] font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-600/10"
                           >
-                            <Save className="w-3.5 h-3.5" />
-                            <span>Save New Customer</span>
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Save New Tenant</span>
                           </button>
                         </>
                       ) : (
                         <>
-                          {/* Delete button */}
+                          {/* Delete Tenant button */}
                           <button
                             onClick={() => {
                               setDashboardConfirm({
-                                title: "Delete Customer Profile",
-                                message: `Are you sure you want to delete customer profile ${custCompanyName} from Firestore?`,
+                                title: "Delete Customer Tenant Profile",
+                                message: `Are you sure you want to permanently delete customer profile ${custCompanyName} from Firestore? This will remove all tenant database credentials and routing properties.`,
                                 onConfirm: async () => {
                                   try {
                                     await deleteDoc(doc(db, "tenants", selectedCustomerId));
@@ -3554,7 +4256,7 @@ export default function SupportDashboard({
                                       setSelectedCustomerId("");
                                     }
                                     console.log(`[Customer Manager] Deleted customer ${custCompanyName} from Firestore`);
-                                    setToast({ message: `Customer profile ${custCompanyName} deleted.`, type: "success" });
+                                    setToast({ message: `Customer tenant ${custCompanyName} deleted.`, type: "success" });
                                   } catch (err: any) {
                                     console.error("Failed to delete customer profile:", err);
                                     setToast({ message: "Failed to delete customer profile from Firestore.", type: "error" });
@@ -3562,13 +4264,13 @@ export default function SupportDashboard({
                                 }
                               });
                             }}
-                            className="bg-slate-900/40 hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 border border-slate-800/80 hover:border-rose-900/60 font-mono text-[10px] font-bold py-2 px-3 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer mr-auto"
+                            className="bg-slate-900/40 hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 border border-slate-800/80 hover:border-rose-900/60 font-mono text-[10px] font-bold py-2 px-3.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer mr-auto"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
-                            <span>Delete</span>
+                            <span>Delete Tenant</span>
                           </button>
  
-                          {/* Save Profile button */}
+                          {/* Update Tenant Details button */}
                           <button
                             onClick={async () => {
                               if (!custCompanyName.trim()) {
@@ -3602,62 +4304,16 @@ export default function SupportDashboard({
                                 }
                                 setSelectedCustomerId(custTenantId);
                                 console.log("[Customer Manager] Saved updated customer profile details to Firestore.");
-                                setToast({ message: "Customer profile successfully saved to Firestore!", type: "success" });
+                                setToast({ message: "Customer tenant details successfully updated in Firestore!", type: "success" });
                               } catch (err: any) {
                                 console.error("Failed to update customer in Firestore:", err);
-                                setToast({ message: "Failed to save customer profile.", type: "error" });
-                              }
-                            }}
-                            className="bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 font-mono text-[10px] font-bold py-2 px-3.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <Save className="w-3.5 h-3.5" />
-                            <span>Save Profile</span>
-                          </button>
- 
-                          {/* Update button */}
-                          <button
-                            onClick={async () => {
-                              if (!custCompanyName.trim()) {
-                                setToast({ message: "Company Name is required.", type: "error" });
-                                return;
-                              }
-                              const updatedCustomer: CustomerTenant = {
-                                id: custTenantId,
-                                companyName: custCompanyName,
-                                address1: custAddress1,
-                                address2: custAddress2,
-                                email: custEmail,
-                                secondEmail: custSecondEmail,
-                                phone: custPhone,
-                                city: custCity,
-                                state: custState,
-                                zipCode: custZipCode,
-                                subdomain: custSubdomain,
-                                customerPortalAssigned: custCustPortalAssigned,
-                                performancePortalAssigned: custPerfPortalAssigned,
-                                activationToken: custActivationToken,
-                                tempPassword: custTempPassword,
-                                activationStatus: custActivationStatus
-                              };
-                              try {
-                                if (custTenantId !== selectedCustomerId) {
-                                  await setDoc(doc(db, "tenants", custTenantId), updatedCustomer);
-                                  await deleteDoc(doc(db, "tenants", selectedCustomerId));
-                                } else {
-                                  await setDoc(doc(db, "tenants", selectedCustomerId), updatedCustomer);
-                                }
-                                setSelectedCustomerId(custTenantId);
-                                console.log("[Customer Manager] Updated database credentials and tenant routing successfully in Firestore.");
-                                setToast({ message: "Customer Routing Credentials and details Updated in Firestore!", type: "success" });
-                              } catch (err: any) {
-                                console.error("Failed to update customer credentials in Firestore:", err);
-                                setToast({ message: "Failed to update customer credentials.", type: "error" });
+                                setToast({ message: "Failed to update tenant details.", type: "error" });
                               }
                             }}
                             className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-[10px] font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-600/10"
                           >
                             <RefreshCw className="w-3.5 h-3.5" />
-                            <span>Update</span>
+                            <span>Update Tenant Details</span>
                           </button>
                         </>
                       )}
@@ -3666,6 +4322,169 @@ export default function SupportDashboard({
                 )}
               </div>
 
+                </div>
+
+                {/* Global Admin Lookup & System User Management Console */}
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl mt-6">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-400">
+                        <Shield className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-white font-mono uppercase tracking-wider flex items-center gap-2">
+                          <span>🔍 Global Admin & System User Lookup</span>
+                          <span className="text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/20 px-2 py-0.5 rounded font-mono font-bold">
+                            Live Firestore Sync
+                          </span>
+                        </h3>
+                        <p className="text-[11px] text-slate-400">
+                          Search, audit, and delete administrator accounts across all workspace tenants.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center gap-2">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Lookup admin by email, name, or role..."
+                          value={adminLookupQuery}
+                          onChange={(e) => setAdminLookupQuery(e.target.value)}
+                          className="bg-slate-900 border border-slate-800 text-slate-200 text-xs focus:border-amber-400 focus:outline-none rounded-xl pl-9 pr-8 py-2 w-64 font-mono"
+                        />
+                        <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                        {adminLookupQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setAdminLookupQuery("")}
+                            className="text-slate-400 hover:text-white text-xs font-bold absolute right-3 top-2.5 cursor-pointer"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+
+                      <select
+                        value={adminLookupFilter}
+                        onChange={(e) => setAdminLookupFilter(e.target.value as any)}
+                        className="bg-slate-900 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-2 font-mono focus:outline-none focus:border-amber-400"
+                      >
+                        <option value="All">All User Records</option>
+                        <option value="Admins">All Admins</option>
+                        <option value="SparkAdmins">Spark Admins Only</option>
+                        <option value="Users">Standard Users Only</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Admin & Users Table */}
+                  <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-900/40">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-800 bg-slate-900 text-[10px] font-mono uppercase font-bold text-slate-400 tracking-wider">
+                          <th className="py-3 px-4">User / Email</th>
+                          <th className="py-3 px-4">Role & Access</th>
+                          <th className="py-3 px-4">Tenant Scope</th>
+                          <th className="py-3 px-4">Enrollment Status</th>
+                          <th className="py-3 px-4 text-right">Delete / Revoke</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 font-mono">
+                        {globalUsersList
+                          .filter((u) => {
+                            const queryStr = adminLookupQuery.toLowerCase().trim();
+                            const matchesQuery =
+                              !queryStr ||
+                              (u.email || "").toLowerCase().includes(queryStr) ||
+                              (u.name || "").toLowerCase().includes(queryStr) ||
+                              (u.role || "").toLowerCase().includes(queryStr) ||
+                              (u.tenant_id || u.tenantId || "").toLowerCase().includes(queryStr);
+
+                            const isSparkAdmin = u.tenant_id === "tenant-master-admin" || u.role === "spark_admin" || (u.email && u.email.endsWith("@sparkanalytic.com"));
+                            const isAdmin = isSparkAdmin || u.role === "tenant_admin" || u.role === "tenant_super_admin" || u.role === "Administrator" || u.role === "Tenant Admin";
+
+                            if (adminLookupFilter === "Admins") return matchesQuery && isAdmin;
+                            if (adminLookupFilter === "SparkAdmins") return matchesQuery && isSparkAdmin;
+                            if (adminLookupFilter === "Users") return matchesQuery && !isAdmin;
+                            return matchesQuery;
+                          })
+                          .map((u) => {
+                            const isSparkAdmin = u.tenant_id === "tenant-master-admin" || u.role === "spark_admin" || (u.email && u.email.endsWith("@sparkanalytic.com"));
+                            const isAdmin = isSparkAdmin || u.role === "tenant_admin" || u.role === "tenant_super_admin" || u.role === "Administrator" || u.role === "Tenant Admin";
+
+                            return (
+                              <tr key={u.id} className="hover:bg-slate-800/40 transition-colors">
+                                <td className="py-3 px-4">
+                                  <div className="flex items-center gap-2">
+                                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs ${
+                                      isSparkAdmin ? "bg-amber-500/20 border border-amber-500/40 text-amber-300" : isAdmin ? "bg-purple-500/20 border border-purple-500/40 text-purple-300" : "bg-slate-800 border border-slate-700 text-slate-400"
+                                    }`}>
+                                      {isSparkAdmin ? "⚡" : isAdmin ? "🛡️" : "👤"}
+                                    </div>
+                                    <div>
+                                      <span className="font-bold text-slate-100 block">{u.name || u.email?.split("@")[0]}</span>
+                                      <span className="text-[11px] text-slate-400">{u.email}</span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                    isSparkAdmin
+                                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                                      : isAdmin
+                                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                                      : "bg-slate-800 text-slate-400 border border-slate-700"
+                                  }`}>
+                                    {u.role || "User"}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 text-slate-300">
+                                  <span className="bg-slate-950 border border-slate-800 px-2 py-0.5 rounded text-rose-400 font-bold">
+                                    {u.tenant_id || u.tenantId || "CLIENT-A"}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 text-slate-400">
+                                  <span className="capitalize">{u.enrollment_status || u.status || "Active"}</span>
+                                </td>
+                                <td className="py-3 px-4 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDashboardConfirm({
+                                        title: "Delete Admin / User Account",
+                                        message: `Are you sure you want to permanently delete admin account (${u.email}) from Firestore?`,
+                                        onConfirm: async () => {
+                                          try {
+                                            await deleteDoc(doc(db, "users", u.id));
+                                            setToast({ message: `Successfully deleted user ${u.email}`, type: "success" });
+                                          } catch (err: any) {
+                                            console.error("Failed to delete user:", err);
+                                            setToast({ message: "Failed to delete user record.", type: "error" });
+                                          }
+                                        }
+                                      });
+                                    }}
+                                    className="p-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-all cursor-pointer inline-flex items-center gap-1 font-mono text-[10px]"
+                                    title="Delete user record"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>Delete</span>
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        {globalUsersList.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="py-8 text-center text-slate-500 text-xs italic">
+                              No user or admin records found in Firestore.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -4232,35 +5051,591 @@ const sendEmailSmtp = async () => {
               </motion.div>
             )}
 
-            {/* VIEW 6: CALL DIAGNOSTICS */}
-            {activeSupportTab === "diagnostics" && (
+            {/* VIEW 7: TENANT S3 COMPLIANCE STORES */}
+            {activeSupportTab === "tenant-data" && (
               <motion.div 
-                key="view-diagnostics"
+                key="view-tenant-data"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 10 }}
-                className="bg-white text-slate-900 border border-slate-200 rounded-3xl p-6 shadow-xl space-y-6 overflow-hidden w-full"
+                className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl p-6 shadow-xl space-y-6 overflow-hidden w-full"
               >
                 {/* Header */}
-                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 border-b border-slate-200 pb-4">
+                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 border-b border-slate-800 pb-4">
                   <div className="space-y-1">
-                    <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-blue-500" />
-                      <span>Call Diagnostic Console</span>
+                    <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                      <Database className="w-5 h-5 text-emerald-400" />
+                      <span>Tenant S3 Compliance Interface</span>
                     </h2>
-                    <p className="text-xs text-slate-500">Dialogue Sales Interaction & Persuasion Diagnostic Engine inside Support Center.</p>
+                    <p className="text-xs text-slate-400">Configure, provision, and attach compliance guidelines and coach playbooks on per-tenant AWS S3 partitioned buckets.</p>
+                  </div>
+                  {selectedTenantDataId && (
+                    <button
+                      onClick={() => handleSelectTenantForData("")}
+                      className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-300 rounded-xl text-xs font-mono transition-all flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+                    >
+                      <ArrowRight className="w-3.5 h-3.5 rotate-180 text-slate-400" />
+                      <span>Back to Tenant Directory</span>
+                    </button>
+                  )}
+                </div>
+
+                {!selectedTenantDataId ? (
+                  /* TENANT SELECTOR DIRECTORY VIEW */
+                  <div className="space-y-4">
+                    {/* Search bar */}
+                    <div className="relative">
+                      <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
+                      <input
+                        type="text"
+                        placeholder="Search tenants by Company Name, ID or Subdomain..."
+                        value={tenantDataSearch}
+                        onChange={(e) => setTenantDataSearch(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-10 pr-4 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 transition-all font-mono"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {customersList.filter(c => {
+                        const search = (tenantDataSearch || "").toLowerCase();
+                        return (
+                          (c.companyName || "").toLowerCase().includes(search) ||
+                          (c.id || "").toLowerCase().includes(search) ||
+                          (c.subdomain || "").toLowerCase().includes(search)
+                        );
+                      }).map((tenant) => {
+                        const fileCount = tenant.s3Files?.length ?? DEFAULT_S3_FILES.length;
+                        return (
+                          <div
+                            key={tenant.id}
+                            onClick={() => handleSelectTenantForData(tenant.id)}
+                            className="bg-slate-950/60 hover:bg-slate-950 border border-slate-800 hover:border-emerald-500/30 rounded-2xl p-4 transition-all duration-300 cursor-pointer flex flex-col justify-between group h-40 shadow-sm"
+                          >
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-start">
+                                <div className="p-2 bg-slate-900 border border-slate-800 text-slate-300 rounded-xl group-hover:border-emerald-500/20 group-hover:text-emerald-400 transition-all">
+                                  <HardDrive className="w-4 h-4" />
+                                </div>
+                                <span className={`text-[9px] font-bold font-mono px-2 py-0.5 rounded-full ${
+                                  tenant.activationStatus === "Active"
+                                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                    : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                                }`}>
+                                  {tenant.activationStatus ?? "Not Invited"}
+                                </span>
+                              </div>
+
+                              <div>
+                                <h3 className="text-xs font-bold text-slate-200 group-hover:text-emerald-400 transition-all line-clamp-1">{tenant.companyName}</h3>
+                                <p className="text-[10px] text-slate-500 font-mono">id: {tenant.id}</p>
+                              </div>
+                            </div>
+
+                            <div className="flex justify-between items-center border-t border-slate-800/60 pt-3 mt-2 text-[10px] font-mono">
+                              <div className="flex items-center gap-1.5 text-slate-400">
+                                <FolderOpen className="w-3.5 h-3.5 text-slate-500" />
+                                <span>{fileCount} S3 Objects</span>
+                              </div>
+                              <div className="flex items-center gap-1 text-emerald-400 opacity-0 group-hover:opacity-100 transition-all font-sans">
+                                <span>Open</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  /* ACTIVE TENANT S3 BUCKET VIEW */
+                  (() => {
+                    const tenant = customersList.find(c => c.id === selectedTenantDataId);
+                    if (!tenant) return null;
+                    const tenantSubdomain = (tenant.subdomain || "default").toLowerCase();
+                    const s3BucketUri = `s3://spark-tenant-data-${tenantSubdomain}/`;
+
+                    return (
+                      <div className="space-y-6">
+                        {/* Bucket Overview Card */}
+                        <div className="bg-slate-950 border border-slate-800/80 rounded-2xl p-4 space-y-3.5">
+                          <div className="flex flex-col md:flex-row justify-between md:items-center gap-3">
+                            <div className="space-y-1">
+                              <span className="text-[8px] font-bold font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/20 rounded-full tracking-wider">AWS PARTITION PROVISIONED</span>
+                              <div className="flex items-center gap-2 pt-0.5">
+                                <code className="text-xs md:text-sm font-bold font-mono text-slate-200 tracking-tight">{s3BucketUri}</code>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                              <span className="text-[10px] font-mono text-slate-400">Region: <strong className="text-slate-200 font-bold">us-west-2</strong> (Oregon)</span>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 border-t border-slate-800/80 pt-3 text-[10px] font-mono">
+                            <div>
+                              <p className="text-slate-500">Storage Class</p>
+                              <p className="text-slate-300 font-bold">S3 Standard-IA</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-500">Access Type</p>
+                              <p className="text-amber-400 font-bold">SSE-KMS Encryption</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-500">Total Object Count</p>
+                              <p className="text-emerald-400 font-bold">{activeTenantFiles.length} files</p>
+                            </div>
+                            <div>
+                              <p className="text-slate-500">Data Footprint</p>
+                              <p className="text-emerald-400 font-bold">{computeActiveFilesTotalSize()} MB</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Split layout: Files List & File Upload Form */}
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                          {/* Left: Files List (7 Cols) */}
+                          <div className="lg:col-span-7 space-y-4">
+                            <div className="flex justify-between items-center">
+                              <h3 className="text-xs font-bold font-mono text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                                <FolderOpen className="w-4 h-4 text-emerald-400" />
+                                <span>Bucket Index ({activeTenantFiles.length})</span>
+                              </h3>
+                              {isTenantDataDirty && (
+                                <span className="text-[9px] font-bold font-mono text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full animate-pulse">
+                                  Staged Changes Pending Save
+                                </span>
+                              )}
+                            </div>
+
+                            {activeTenantFiles.length === 0 ? (
+                              <div className="bg-slate-950/40 border border-slate-800/80 border-dashed rounded-2xl p-12 text-center flex flex-col items-center justify-center space-y-3">
+                                <FolderOpen className="w-10 h-10 text-slate-700" />
+                                <div className="space-y-1">
+                                  <p className="text-xs font-bold text-slate-400">Empty S3 Namespace Partition</p>
+                                  <p className="text-[10px] text-slate-500 max-w-xs mx-auto">No compliance guidelines or evaluation models are uploaded yet. Use the staging panel on the right to attach assets.</p>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
+                                {activeTenantFiles.map((file) => (
+                                  <div 
+                                    key={file.id} 
+                                    className="bg-slate-950/80 hover:bg-slate-950 border border-slate-800 hover:border-slate-700/80 rounded-xl p-3.5 transition-all flex items-start gap-3.5 group relative"
+                                  >
+                                    <div className="p-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-400 group-hover:text-emerald-400 group-hover:border-emerald-500/10 transition-all self-start mt-0.5">
+                                      <FileText className="w-4 h-4" />
+                                    </div>
+                                    <div className="flex-1 min-w-0 space-y-1">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <h4 className="text-xs font-bold text-slate-200 truncate pr-4">{file.name}</h4>
+                                        <span className="text-[8px] font-bold font-mono uppercase bg-slate-800 text-slate-400 px-1.5 py-0.2 rounded">
+                                          {file.type}
+                                        </span>
+                                      </div>
+                                      <p className="text-[11px] text-slate-400 leading-normal">{file.description}</p>
+                                      
+                                      {file.directive && (
+                                        <div className="bg-slate-900/60 border-l-2 border-emerald-500/40 px-2 py-1 text-[10px] text-emerald-400/90 font-mono mt-1">
+                                          <strong>Parser Directive:</strong> {file.directive}
+                                        </div>
+                                      )}
+
+                                      <div className="flex items-center gap-3 pt-1.5 text-[9px] font-mono text-slate-500 flex-wrap">
+                                        <span className="truncate max-w-[200px] md:max-w-xs">{file.s3Uri}</span>
+                                        <span>•</span>
+                                        <span>{file.size}</span>
+                                      </div>
+                                    </div>
+
+                                    {/* Delete/Trash Button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteLocalS3File(file.id)}
+                                      className="p-1.5 bg-slate-900 hover:bg-rose-500/10 hover:text-rose-400 text-slate-500 border border-slate-800 hover:border-rose-500/20 rounded-lg transition-all cursor-pointer self-center"
+                                      title="Delete Object"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Right: Attach File Form (5 Cols) */}
+                          <div className="lg:col-span-5 space-y-4">
+                            <h3 className="text-xs font-bold font-mono text-slate-300 uppercase tracking-wider">
+                              Attach Knowledge Document
+                            </h3>
+
+                            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 space-y-3.5">
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold font-mono text-slate-400 uppercase">Document Asset Name *</label>
+                                <input
+                                  type="text"
+                                  placeholder="e.g. Compensation_Guideline_v2"
+                                  value={newS3FileName}
+                                  onChange={(e) => setNewS3FileName(e.target.value)}
+                                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/40"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold font-mono text-slate-400 uppercase">Asset Classification</label>
+                                <select
+                                  value={newS3FileType}
+                                  onChange={(e) => setNewS3FileType(e.target.value)}
+                                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-300 focus:outline-none focus:border-emerald-500/40 font-mono"
+                                >
+                                  <option value="material">Sales Playbook / Material</option>
+                                  <option value="policy">Corporate/SLA Policy</option>
+                                  <option value="checklist">Evaluation Checklist</option>
+                                  <option value="transcript">Dialogue Transcript PDF</option>
+                                  <option value="directive">AI Directives</option>
+                                  <option value="other">Other S3 Object</option>
+                                </select>
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold font-mono text-slate-400 uppercase">Short Description</label>
+                                <textarea
+                                  placeholder="What compliance role does this playbook or SLA document play?"
+                                  value={newS3FileDesc}
+                                  onChange={(e) => setNewS3FileDesc(e.target.value)}
+                                  rows={2}
+                                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/40 resize-none"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold font-mono text-slate-400 uppercase">AI Grounding Directive</label>
+                                <textarea
+                                  placeholder="Instructions for how the agent should reference this when auditing calls..."
+                                  value={newS3FileDirective}
+                                  onChange={(e) => setNewS3FileDirective(e.target.value)}
+                                  rows={2}
+                                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/40 resize-none"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold font-mono text-slate-400 uppercase">Download Target URL (Optional)</label>
+                                <input
+                                  type="url"
+                                  placeholder="https://example.com/secure/playbook.pdf"
+                                  value={newS3FileUrl}
+                                  onChange={(e) => setNewS3FileUrl(e.target.value)}
+                                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-700 focus:outline-none focus:border-emerald-500/40 font-mono"
+                                />
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={(e) => handleAttachLocalS3File(e)}
+                                className="w-full bg-slate-900 hover:bg-slate-800 border border-slate-750 text-emerald-400 hover:text-emerald-300 font-mono text-[10px] font-bold py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                <UploadCloud className="w-4 h-4" />
+                                <span>Attach to Staging Bucket</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Save Confirmation Control Board */}
+                        <div className="bg-slate-950 border border-slate-800 p-4 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4">
+                          <div className="space-y-1">
+                            <h4 className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                              <span>S3 Sync Control Terminal</span>
+                            </h4>
+                            <p className="text-[11px] text-slate-400 max-w-xl">
+                              Save operations immediately replicate staged objects to AWS S3 and provision metadata structures for tenant <strong className="text-slate-300">{tenant.companyName}</strong>.
+                            </p>
+                          </div>
+                          
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDashboardConfirm({
+                                title: "Save S3 Tenant Data changes",
+                                message: `Are you sure you wish to save these changes to tenant ${tenant.companyName}?`,
+                                confirmText: "Yes",
+                                cancelText: "No",
+                                onConfirm: () => {
+                                  handleSaveTenantData();
+                                }
+                              });
+                            }}
+                            disabled={isSavingTenantData}
+                            className={`w-full md:w-auto px-6 py-2.5 rounded-xl font-mono text-xs font-bold transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
+                              isTenantDataDirty
+                                ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20 border border-emerald-500"
+                                : "bg-slate-800 text-slate-400 hover:bg-slate-750 hover:text-slate-200 border border-slate-700"
+                            }`}
+                          >
+                            <Save className="w-4 h-4" />
+                            <span>{isSavingTenantData ? "Synchronizing S3..." : "Save Changes"}</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()
+                )}
+              </motion.div>
+            )}
+
+            {/* VIEW 8: ENTERPRISE PLATFORM INTEGRATIONS */}
+            {activeSupportTab === "integrations" && (
+              <motion.div 
+                key="view-integrations"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl p-6 shadow-xl space-y-6 w-full"
+              >
+                {/* Header */}
+                <div className="border-b border-slate-800 pb-4">
+                  <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-emerald-400" />
+                    <span>Communications & Platform Integrations</span>
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Connect and manage third-party customer voice and video platforms to ingest conversations automatically.
+                  </p>
+                </div>
+
+                {/* Gong notifications messages */}
+                {gongSuccessMessage && (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>{gongSuccessMessage}</span>
+                  </div>
+                )}
+                {gongErrorMessage && (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl text-xs flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 shrink-0" />
+                    <span>{gongErrorMessage}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Zoom Card */}
+                  <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center font-bold text-sm shrink-0">
+                        Z
+                      </div>
+                      <div>
+                        <span className="font-semibold text-slate-200 text-xs block flex items-center">
+                          Zoom Video Integration
+                          {zoomConnected ? (
+                            <span className="ml-2 w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                          ) : (
+                            <span className="ml-2 w-1.5 h-1.5 rounded-full bg-slate-600" />
+                          )}
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          {zoomConnected 
+                            ? `Automated cron sync active (Every ${zoomInterval}m)` 
+                            : "Synchronized cloud recording pipeline"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => setZoomModalOpen(true)}
+                        className="py-1.5 px-3 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-xs border border-blue-500 transition-all cursor-pointer"
+                      >
+                        Configure & Sync
+                      </button>
+                      <button
+                        onClick={() => {
+                          const nextState = !zoomConnected;
+                          setZoomConnected(nextState);
+                          setZoomAutoEnabled(nextState);
+                          fetch("/api/v1/zoom/credentials", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ enabled: nextState })
+                          });
+                        }}
+                        className={`py-1.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          zoomConnected 
+                            ? "bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20" 
+                            : "bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700"
+                        }`}
+                      >
+                        {zoomConnected ? "Enabled" : "Disabled"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Gong Card */}
+                  <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-sm shrink-0">
+                        G
+                      </div>
+                      <div>
+                        <span className="font-semibold text-slate-200 text-xs block flex items-center">
+                          Gong.io CRM Pipe
+                          {gongConnected ? (
+                            <span className="ml-2 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          ) : (
+                            <span className="ml-2 w-1.5 h-1.5 rounded-full bg-slate-600" />
+                          )}
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          {gongConnected 
+                            ? `Automated cron sync active (Every ${gongInterval}m)` 
+                            : "Synchronized sales recording integration"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => setGongModalOpen(true)}
+                        className="py-1.5 px-3 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs border border-emerald-500 transition-all cursor-pointer"
+                      >
+                        Configure & Sync
+                      </button>
+                      <button
+                        onClick={() => {
+                          const nextState = !gongConnected;
+                          setGongConnected(nextState);
+                          setGongAutoEnabled(nextState);
+                          fetch("/api/v1/gong/credentials", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ enabled: nextState })
+                          });
+                        }}
+                        className={`py-1.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          gongConnected 
+                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20" 
+                            : "bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700"
+                        }`}
+                      >
+                        {gongConnected ? "Enabled" : "Disabled"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Teams Card */}
+                  <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold shrink-0">
+                        T
+                      </div>
+                      <div>
+                        <span className="font-semibold text-slate-200 text-xs block">Microsoft Teams</span>
+                        <span className="text-[10px] text-slate-400">Auto-transcribe team chats and visual calls</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setTeamsConnected(!teamsConnected)}
+                      className={`py-1.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                        teamsConnected 
+                          ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20" 
+                          : "bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700"
+                      }`}
+                    >
+                      {teamsConnected ? "Connected" : "Connect Now"}
+                    </button>
+                  </div>
+
+                  {/* Google Meet Card */}
+                  <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-10 h-10 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center font-bold shrink-0">
+                        G
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-200 text-xs block">Google Meet Integration</span>
+                          {googleConnected ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold font-sans px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                              Linked
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold font-sans px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+                              Not Linked
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-400 block mt-0.5">Sync Meet transcripts from Google Workspace calendar events</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleToggleGoogle(!googleConnected)}
+                      className={`py-1.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
+                        googleConnected 
+                          ? "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" 
+                          : "bg-rose-600 hover:bg-rose-750 text-white shadow-xs border border-rose-500"
+                      }`}
+                    >
+                      {googleConnected ? "Disconnect" : "Connect Google Account"}
+                    </button>
+                  </div>
+
+                  {/* Amazon SES Solution Card */}
+                  <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 md:col-span-2">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center font-bold shrink-0 border border-amber-500/20">
+                        <Mail className="w-5 h-5 text-amber-400" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-200 text-xs block">
+                            Amazon SES Outbound Email Solution
+                          </span>
+                          {awsSesEnabled ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                              {awsEnvStatus?.hasAwsAccessKeyId ? "SDK Active & Verified" : "Active"}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+                              Disabled
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-400 block mt-0.5">
+                          Send transactional welcome emails, temporary passwords, and secure onboarding invites to workspace invitees via AWS Simple Email Service ({awsRegion} • {awsSesSender})
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <button
+                        onClick={() => {
+                          fetchAwsSesStatus();
+                          setAwsSesModalOpen(true);
+                        }}
+                        className="py-1.5 px-3 rounded-xl text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-xs border border-amber-400 font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                        <span>Configure & Send Invites</span>
+                      </button>
+                      <button
+                        onClick={() => setAwsSesEnabled(!awsSesEnabled)}
+                        className={`py-1.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          awsSesEnabled 
+                            ? "bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20" 
+                            : "bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700"
+                        }`}
+                      >
+                        {awsSesEnabled ? "Enabled" : "Disabled"}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
-                <div className="w-full">
-                  <InteractiveDashboard
-                    sessions={sessions}
-                    onAddSession={onAddSession || (() => {})}
-                    onUpdateSession={onUpdateSession || (() => {})}
-                    onSelectSession={onSelectSession || (() => {})}
-                    activeSession={activeSession}
-                  />
-                </div>
+                {googleConnected && (
+                  <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5">
+                    <GoogleMeetWorkspace />
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -4292,8 +5667,16 @@ const sendEmailSmtp = async () => {
               className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4"
             >
               <div className="flex items-start gap-3">
-                <div className="p-2 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-xl">
-                  <ShieldAlert className="w-5 h-5" />
+                <div className={`p-2 rounded-xl border ${
+                  dashboardConfirm.confirmText === "Yes"
+                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                    : "bg-rose-500/10 text-rose-500 border-rose-500/20"
+                }`}>
+                  {dashboardConfirm.confirmText === "Yes" ? (
+                    <Database className="w-5 h-5" />
+                  ) : (
+                    <ShieldAlert className="w-5 h-5" />
+                  )}
                 </div>
                 <div className="space-y-1">
                   <h3 className="font-bold text-sm text-slate-100">{dashboardConfirm.title}</h3>
@@ -4305,16 +5688,20 @@ const sendEmailSmtp = async () => {
                   onClick={() => setDashboardConfirm(null)}
                   className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-300 rounded-xl text-xs font-mono transition-all cursor-pointer"
                 >
-                  Cancel
+                  {dashboardConfirm.cancelText || "Cancel"}
                 </button>
                 <button
                   onClick={() => {
                     dashboardConfirm.onConfirm();
                     setDashboardConfirm(null);
                   }}
-                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-mono transition-all cursor-pointer shadow-md shadow-rose-600/20"
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-mono transition-all cursor-pointer shadow-md ${
+                    dashboardConfirm.confirmText === "Yes"
+                      ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20"
+                      : "bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20"
+                  }`}
                 >
-                  Confirm Delete
+                  {dashboardConfirm.confirmText || "Confirm Delete"}
                 </button>
               </div>
             </motion.div>
@@ -4562,6 +5949,1243 @@ const sendEmailSmtp = async () => {
               <XCircle className="w-3.5 h-3.5" />
             </button>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ==================== GONG.IO CRM INTEGRATION CONSOLE (DARK THEME) ==================== */}
+      <AnimatePresence>
+        {gongModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            {/* Backdrop */}
+            <div 
+              className="absolute inset-0"
+              onClick={() => setGongModalOpen(false)}
+            />
+            
+            {/* Modal Box */}
+            <div className="bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl w-full max-w-3xl overflow-hidden relative z-10 flex flex-col max-h-[90vh] animate-in fade-in-50 zoom-in-95 duration-200">
+              
+              {/* Header */}
+              <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/40">
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 font-bold text-sm border border-emerald-500/20">
+                    G
+                  </div>
+                  <div>
+                    <h3 className="font-display font-bold text-slate-100 text-sm">
+                      Gong.io CRM Integration Console
+                    </h3>
+                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                      Secure Repository Pull Engine & Automated Webhooks
+                    </p>
+                  </div>
+                </div>
+                
+                <button 
+                  onClick={() => setGongModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-200 p-1.5 hover:bg-slate-800 rounded-xl transition-all cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Scrollable Body */}
+              <div className="p-6 overflow-y-auto flex-1 space-y-6">
+                
+                {/* Messages */}
+                {gongSuccessMessage && (
+                  <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold flex items-center space-x-2 animate-in slide-in-from-top-1">
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                    <span>{gongSuccessMessage}</span>
+                  </div>
+                )}
+                
+                {gongErrorMessage && (
+                  <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold flex items-center space-x-2 animate-in slide-in-from-top-1">
+                    <ShieldAlert className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>{gongErrorMessage}</span>
+                  </div>
+                )}
+
+                {/* Grid Layout for Configuration & Sync Dashboard */}
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                  
+                  {/* Left Column: API Credentials & Setup (Span 7) */}
+                  <div className="md:col-span-7 space-y-4">
+                    <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-3">
+                      <div className="flex items-center space-x-2 text-slate-200 font-semibold text-xs">
+                        <Key className="w-4 h-4 text-emerald-400" />
+                        <span>API Access Keys</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        In your Gong Developer Portal, generate an API Access Key ID and Secret with <code>calls:read</code> permissions. 
+                        To test in the Sandbox immediately, leave or set the key containing <code>sandbox</code>.
+                      </p>
+
+                      <form onSubmit={saveGongCredentials} className="space-y-3 pt-1">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Gong Access Key ID</label>
+                          <input 
+                            type="text" 
+                            value={gongAccessKeyId}
+                            onChange={(e) => setGongAccessKeyId(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                            placeholder="CUTT36OZ63XHA4NV7F7IAWTX5BESF57S"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Gong Access Key Secret</label>
+                          <input 
+                            type="password" 
+                            value={gongAccessKeySecret}
+                            onChange={(e) => setGongAccessKeySecret(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                            placeholder="••••••••••••••••••••"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Gong API Endpoint Gateway</label>
+                          <input 
+                            type="text" 
+                            value={gongApiEndpoint}
+                            onChange={(e) => setGongApiEndpoint(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none font-mono text-[10px]"
+                            placeholder="https://api.gong.io/v2/"
+                          />
+                        </div>
+
+                        {/* Polling Interval & Enabled switch */}
+                        <div className="pt-2 border-t border-slate-800 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-semibold text-slate-200">Automated Polling (Cron)</span>
+                              <span className="text-[10px] text-slate-400 font-normal">Enable automatic background synchronization</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={gongAutoEnabled}
+                              onChange={(e) => setGongAutoEnabled(e.target.checked)}
+                              className="w-4 h-4 text-emerald-600 border-slate-700 bg-slate-900 rounded focus:ring-emerald-500 cursor-pointer"
+                            />
+                          </div>
+
+                          {gongAutoEnabled && (
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Polling Interval</label>
+                              <select
+                                value={gongInterval}
+                                onChange={(e) => setGongInterval(Number(e.target.value))}
+                                className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-xl px-3 py-1.5 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none text-slate-300 font-medium"
+                              >
+                                <option value="15">Every 15 Minutes</option>
+                                <option value="30">Every 30 Minutes</option>
+                                <option value="60">Hourly (Recommended)</option>
+                                <option value="360">Every 6 Hours</option>
+                                <option value="1440">Daily</option>
+                              </select>
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="w-full py-2 bg-slate-800 hover:bg-slate-750 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 border border-slate-700"
+                        >
+                          <Save className="w-4 h-4 text-emerald-400" />
+                          <span>Save Gong Settings</span>
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Webhook Configuration Block */}
+                    <div className="p-4 bg-emerald-500/5 rounded-2xl border border-emerald-500/10 space-y-2">
+                      <div className="flex items-center space-x-2 text-emerald-400 font-semibold text-xs">
+                        <Code className="w-4 h-4 text-emerald-400" />
+                        <span>Webhook Handshake Receiver</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        To receive instantaneous callbacks from Gong when calls are finished, paste this Webhook URL into the Gong Webhooks Configuration Panel.
+                      </p>
+                      <div className="flex items-center space-x-2 mt-1.5">
+                        <input 
+                          type="text" 
+                          readOnly 
+                          value={`${window.location.origin}/api/v1/gong/webhook`}
+                          className="flex-1 bg-slate-900 border border-slate-800 text-[10px] font-mono text-slate-300 px-3 py-1.5 rounded-xl focus:outline-none"
+                        />
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/api/v1/gong/webhook`);
+                            setGongSuccessMessage("Webhook URL copied to clipboard!");
+                            setTimeout(() => setGongSuccessMessage(null), 3000);
+                          }}
+                          className="p-1.5 bg-emerald-900/40 hover:bg-emerald-950 text-emerald-300 rounded-lg transition-all cursor-pointer border border-emerald-500/20"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Gong App Privacy Policy & Developer URL Block */}
+                    <div className="p-4 bg-slate-950 rounded-2xl border border-slate-850 space-y-2">
+                      <div className="flex items-center space-x-2 text-slate-200 font-semibold text-xs">
+                        <Shield className="w-4 h-4 text-emerald-400" />
+                        <span>Gong.io Privacy Policy & OAuth Config</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Gong requires a publicly hosted Privacy Policy URL for your custom application integration. Provide the URL below in your Gong Developer Console:
+                      </p>
+                      
+                      <div className="flex items-center space-x-2 mt-1.5">
+                        <input 
+                          type="text" 
+                          readOnly 
+                          value={`${window.location.origin}/gong-privacy`}
+                          className="flex-1 bg-slate-900 border border-slate-800 text-[10px] font-mono text-slate-300 px-3 py-1.5 rounded-xl focus:outline-none"
+                        />
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/gong-privacy`);
+                            setGongSuccessMessage("Gong Privacy Policy URL copied!");
+                            setTimeout(() => setGongSuccessMessage(null), 3000);
+                          }}
+                          className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-all cursor-pointer border border-slate-700"
+                          title="Copy Privacy Policy URL"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Execution Engine & Logs (Span 5) */}
+                  <div className="md:col-span-5 space-y-4">
+                    <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-3 flex-1 flex flex-col min-h-[300px]">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2 text-slate-200 font-semibold text-xs">
+                          <Terminal className="w-4 h-4 text-emerald-400" />
+                          <span>Synchronization Pipeline</span>
+                        </div>
+                        <span className="text-[9px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-mono font-bold animate-pulse border border-emerald-500/20">
+                          Engine Live
+                        </span>
+                      </div>
+                      
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Triggers manual polling request to pull recent conversation recordings from Gong API gateway into Spark's real-time transcript database.
+                      </p>
+
+                      <button
+                        onClick={triggerGongManualSync}
+                        disabled={gongSyncing || !gongConnected}
+                        className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 shadow-md cursor-pointer ${
+                          gongSyncing
+                            ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-750"
+                            : !gongConnected
+                            ? "bg-slate-900 text-slate-600 cursor-not-allowed border border-slate-800/80"
+                            : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30 border border-emerald-500"
+                        }`}
+                      >
+                        <RefreshCw className={`w-4 h-4 ${gongSyncing ? "animate-spin" : ""}`} />
+                        <span>{gongSyncing ? "Connecting Gateway..." : "Trigger Manual Pull Sync"}</span>
+                      </button>
+
+                      {/* Sync History Logs */}
+                      <div className="flex-1 flex flex-col space-y-2 pt-2 border-t border-slate-800">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Real-time Pull Telemetry Logs:</span>
+                        
+                        <div className="bg-slate-900/70 border border-slate-800/80 rounded-xl p-3 flex-1 overflow-y-auto max-h-[220px] font-mono text-[9px] text-slate-300 space-y-2 scrollbar-thin">
+                          {gongLogsLoading ? (
+                            <div className="flex items-center justify-center h-24 text-slate-500">
+                              <RefreshCw className="w-4 h-4 animate-spin text-emerald-400 mr-2" />
+                              <span>Loading Telemetry...</span>
+                            </div>
+                          ) : gongLogs.length === 0 ? (
+                            <div className="text-slate-500 italic text-center py-8">
+                              No synchronization runs recorded. Trigger manual sync or connect keys.
+                            </div>
+                          ) : (
+                            gongLogs.map((log) => {
+                              const isSuccess = log.status === "SUCCESS";
+                              return (
+                                <div key={log.id} className="border-b border-slate-850 pb-2 last:border-none last:pb-0">
+                                  <div className="flex items-center justify-between text-slate-400 font-bold">
+                                    <span>Sync #{log.id.slice(-4)}</span>
+                                    <span className={isSuccess ? "text-emerald-400" : "text-rose-400"}>
+                                      {log.status}
+                                    </span>
+                                  </div>
+                                  <div className="text-[8.5px] text-slate-500 mt-0.5">
+                                    {new Date(log.timestamp).toLocaleString()}
+                                  </div>
+                                  <div className="text-slate-300 mt-1 leading-normal bg-slate-950/40 p-1.5 rounded border border-slate-900 font-sans">
+                                    {log.details}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+              </div>
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ==================== AWS SES EMAIL INTEGRATION & INVITE CONSOLE ==================== */}
+      <AnimatePresence>
+        {awsSesModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            {/* Backdrop */}
+            <div 
+              className="absolute inset-0"
+              onClick={() => setAwsSesModalOpen(false)}
+            />
+            
+            {/* Modal Box */}
+            <div className="bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl w-full max-w-4xl overflow-hidden relative z-10 flex flex-col max-h-[90vh] animate-in fade-in-50 zoom-in-95 duration-200">
+              
+              {/* Header */}
+              <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 font-bold text-sm border border-amber-500/20">
+                    <Mail className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-bold text-slate-100 text-sm flex items-center gap-2">
+                      <span>Amazon SES Solution & Invite Dispatcher</span>
+                      <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded font-mono font-bold">
+                        {awsEnvStatus?.hasAwsAccessKeyId ? "SDK Connected" : "Sandbox Mode"}
+                      </span>
+                    </h3>
+                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                      Send transactional welcome emails & secure temporary activation tokens via AWS SES
+                    </p>
+                  </div>
+                </div>
+                
+                <button 
+                  onClick={() => setAwsSesModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-200 p-1.5 hover:bg-slate-800 rounded-xl transition-all cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Scrollable Body */}
+              <div className="p-6 overflow-y-auto flex-1 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                  
+                  {/* Left Column: SES Identity & AWS Credentials (5 Cols) */}
+                  <div className="md:col-span-5 space-y-4">
+                    <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-3">
+                      <div className="flex items-center justify-between text-slate-200 font-semibold text-xs">
+                        <span className="flex items-center gap-2">
+                          <Shield className="w-4 h-4 text-amber-400" />
+                          <span>AWS SES Configuration</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={fetchAwsSesStatus}
+                          className="text-[10px] text-amber-400 hover:underline font-mono"
+                        >
+                          Refresh Status
+                        </button>
+                      </div>
+
+                      <div className="space-y-2 text-xs">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                            AWS Region
+                          </label>
+                          <input
+                            type="text"
+                            value={awsRegion}
+                            onChange={(e) => setAwsRegion(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-400"
+                            placeholder="us-east-1"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                            Verified Sender Email
+                          </label>
+                          <input
+                            type="email"
+                            value={awsSesSender}
+                            onChange={(e) => setAwsSesSender(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-400"
+                            placeholder="sender@yourdomain.com"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                            AWS Access Key ID
+                          </label>
+                          <input
+                            type="text"
+                            value={awsAccessKeyId}
+                            onChange={(e) => setAwsAccessKeyId(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-400"
+                            placeholder={awsEnvStatus?.hasAwsAccessKeyId ? "•••••••••••• (Using Env Var)" : "AKIA..."}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                            AWS Secret Access Key
+                          </label>
+                          <input
+                            type="password"
+                            value={awsSecretAccessKey}
+                            onChange={(e) => setAwsSecretAccessKey(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-400"
+                            placeholder={awsEnvStatus?.hasAwsSecretAccessKey ? "•••••••••••• (Using Env Var)" : "AWS Secret..."}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-800 text-[10px] text-slate-400 space-y-1 font-mono">
+                        <div className="flex justify-between">
+                          <span>Status:</span>
+                          <span className={awsEnvStatus?.hasAwsAccessKeyId ? "text-emerald-400 font-bold" : "text-amber-400"}>
+                            {awsEnvStatus?.hasAwsAccessKeyId ? "Server Env Credentials Ready" : "Manual / Fallback Active"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Endpoint:</span>
+                          <span className="text-slate-300">email.{awsRegion}.amazonaws.com</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Send Email to Invitees (7 Cols) */}
+                  <div className="md:col-span-7 space-y-4">
+                    <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-3">
+                      <div className="flex items-center gap-2 text-slate-200 font-semibold text-xs">
+                        <Mail className="w-4 h-4 text-amber-400" />
+                        <span>Send Welcome Email to Invitee</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Dispatch a customized welcome invitation containing temporary login credentials and a secure onboarding activation link via AWS SES.
+                      </p>
+
+                      <div className="space-y-3 pt-1">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Invitee Full Name
+                            </label>
+                            <input
+                              type="text"
+                              value={awsSesInviteName}
+                              onChange={(e) => setAwsSesInviteName(e.target.value)}
+                              placeholder="e.g. Jane Smith"
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Invitee Email Address
+                            </label>
+                            <input
+                              type="email"
+                              value={awsSesInviteEmail}
+                              onChange={(e) => setAwsSesInviteEmail(e.target.value)}
+                              placeholder="e.g. jane.smith@client.com"
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Role Assignment
+                            </label>
+                            <select
+                              value={awsSesInviteRole}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setAwsSesInviteRole(val);
+                                if (val === "spark_admin") {
+                                  setAwsSesInviteTenantId("tenant-master-admin");
+                                } else if (awsSesInviteTenantId === "tenant-master-admin") {
+                                  setAwsSesInviteTenantId("CLIENT-A");
+                                }
+                              }}
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-400"
+                            >
+                              <option value="spark_admin">Spark System Admin</option>
+                              <option value="tenant_admin">Tenant Administrator</option>
+                              <option value="ROLE_REPRESENTATIVE">Sales Representative</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Tenant Scope ID
+                            </label>
+                            <input
+                              type="text"
+                              value={awsSesInviteTenantId}
+                              onChange={(e) => setAwsSesInviteTenantId(e.target.value)}
+                              placeholder="CLIENT-A"
+                              className="w-full bg-slate-900 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={awsSesSending || !awsSesInviteEmail.trim()}
+                          onClick={async () => {
+                            setAwsSesSending(true);
+                            setAwsSesDispatchResult(null);
+                            try {
+                              const res = await fetch("/api/aws-ses/invite", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  email: awsSesInviteEmail.trim(),
+                                  role: awsSesInviteRole,
+                                  tenantId: awsSesInviteTenantId.trim(),
+                                  userName: awsSesInviteName.trim() || awsSesInviteEmail.split("@")[0]
+                                })
+                              });
+                              const data = await res.json();
+                              setAwsSesDispatchResult(data);
+                              if (data.success) {
+                                setToast({ message: `Successfully sent AWS SES welcome invite to ${awsSesInviteEmail}`, type: "success" });
+                              } else {
+                                setToast({ message: `AWS SES dispatch response: ${data.message || 'Complete'}`, type: "info" });
+                              }
+                            } catch (err: any) {
+                              console.error("AWS SES invite error:", err);
+                              setAwsSesDispatchResult({ success: false, error: err.message });
+                              setToast({ message: "Failed to connect to AWS SES API route", type: "error" });
+                            } finally {
+                              setAwsSesSending(false);
+                            }
+                          }}
+                          className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          {awsSesSending ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              <span>Dispatching AWS SES Invite Email...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Mail className="w-4 h-4" />
+                              <span>Send AWS SES Welcome Invite Email</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {awsSesDispatchResult && (
+                        <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-xs space-y-2 animate-in fade-in-50">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold font-mono text-amber-300 text-[11px]">
+                              AWS SES Email Response Output
+                            </span>
+                            <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold ${awsSesDispatchResult.success ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                              {awsSesDispatchResult.success ? 'SUCCESS' : 'RESPONSE'}
+                            </span>
+                          </div>
+
+                          {awsSesDispatchResult.tempPassword && (
+                            <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] space-y-1 text-slate-300">
+                              <div><span className="text-slate-500 font-bold">Temp Password:</span> <span className="text-emerald-400 font-bold">{awsSesDispatchResult.tempPassword}</span></div>
+                              <div><span className="text-slate-500 font-bold">Invite Token:</span> <span className="text-amber-300">{awsSesDispatchResult.inviteToken}</span></div>
+                              <div><span className="text-slate-500 font-bold">Activation Link:</span> <span className="text-blue-400 underline">{awsSesDispatchResult.activationUrl}</span></div>
+                            </div>
+                          )}
+
+                          <pre className="text-[10px] text-slate-400 bg-slate-950 p-2 rounded max-h-36 overflow-y-auto font-mono">
+                            {JSON.stringify(awsSesDispatchResult, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ==================== ZOOM VIDEO INTEGRATION CONSOLE (DARK THEME) ==================== */}
+      <AnimatePresence>
+        {zoomModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            {/* Backdrop */}
+            <div 
+              className="absolute inset-0"
+              onClick={() => setZoomModalOpen(false)}
+            />
+            
+            {/* Modal Box */}
+            <div className="bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl w-full max-w-3xl overflow-hidden relative z-10 flex flex-col max-h-[90vh] animate-in fade-in-50 zoom-in-95 duration-200">
+              
+              {/* Header */}
+              <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/40">
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400 font-bold text-sm border border-blue-500/20">
+                    Z
+                  </div>
+                  <div>
+                    <h3 className="font-display font-bold text-slate-100 text-sm">
+                      Zoom Video Integration Console
+                    </h3>
+                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                      Cloud Recording Ingestion Engine & Automated Webhooks
+                    </p>
+                  </div>
+                </div>
+                
+                <button 
+                  onClick={() => setZoomModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-200 p-1.5 hover:bg-slate-800 rounded-xl transition-all cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Scrollable Body */}
+              <div className="p-6 overflow-y-auto flex-1 space-y-6">
+                
+                {/* Messages */}
+                {zoomSuccessMessage && (
+                  <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold flex items-center space-x-2 animate-in slide-in-from-top-1">
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-blue-400" />
+                    <span>{zoomSuccessMessage}</span>
+                  </div>
+                )}
+                
+                {zoomErrorMessage && (
+                  <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold flex items-center space-x-2 animate-in slide-in-from-top-1">
+                    <ShieldAlert className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>{zoomErrorMessage}</span>
+                  </div>
+                )}
+
+                {/* Grid Layout for Configuration & Sync Dashboard */}
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                  
+                  {/* Left Column: API Credentials & Setup (Span 7) */}
+                  <div className="md:col-span-7 space-y-4">
+                    <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-3">
+                      <div className="flex items-center space-x-2 text-slate-200 font-semibold text-xs">
+                        <Key className="w-4 h-4 text-blue-400" />
+                        <span>Zoom API Credentials</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        In your Zoom App Marketplace, create a <strong>Server-to-Server OAuth</strong> app and configure scope permissions for <code>cloud_recording:read:list_user_recordings:admin</code> or <code>recording:read:admin</code>.
+                      </p>
+
+                      <form onSubmit={saveZoomCredentials} className="space-y-3 pt-1">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Zoom Account ID</label>
+                          <input 
+                            type="text" 
+                            value={zoomAccountId}
+                            onChange={(e) => setZoomAccountId(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                            placeholder="e.g. k7b6v4_3R_K-s8-v9qF3"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Zoom Client ID</label>
+                          <input 
+                            type="text" 
+                            value={zoomClientId}
+                            onChange={(e) => setZoomClientId(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                            placeholder="e.g. zXFIs6ZfFSfKVkEjll4sjw"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Zoom Client Secret</label>
+                          <input 
+                            type="password" 
+                            value={zoomClientSecret}
+                            onChange={(e) => setZoomClientSecret(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                            placeholder="••••••••••••••••••••"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Zoom Webhook Secret Token</label>
+                          <input 
+                            type="password" 
+                            value={zoomSecretToken}
+                            onChange={(e) => setZoomSecretToken(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                            placeholder="xFIs6ZfFSfKVkEjll4sjyw"
+                          />
+                        </div>
+
+                        {/* Switch & Interval */}
+                        <div className="pt-2 border-t border-slate-800 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-[11px] font-semibold text-slate-200 block">Automated Cron Syncing</span>
+                              <span className="text-[9px] text-slate-400 block">Perform automatic polling synchronization</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setZoomAutoEnabled(!zoomAutoEnabled)}
+                              className={`w-9 h-5 rounded-full p-0.5 transition-all cursor-pointer ${
+                                zoomAutoEnabled ? "bg-blue-600 flex justify-end" : "bg-slate-800 flex justify-start"
+                              }`}
+                            >
+                              <div className="w-4 h-4 bg-white rounded-full shadow-xs" />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-4">
+                            <div>
+                              <span className="text-[11px] font-semibold text-slate-200 block">Polling Interval (Minutes)</span>
+                              <span className="text-[9px] text-slate-400 block">Time between checks for new recordings</span>
+                            </div>
+                            <input 
+                              type="number"
+                              min="5"
+                              max="1440"
+                              value={zoomInterval}
+                              onChange={(e) => setZoomInterval(Number(e.target.value))}
+                              className="w-20 bg-slate-900 border border-slate-800 text-slate-100 rounded-lg px-2 py-1 text-right text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="pt-2">
+                          <button
+                            type="submit"
+                            className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
+                          >
+                            <Save className="w-4 h-4" />
+                            <span>Save Zoom Settings</span>
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+
+                    {/* Webhook Endpoint */}
+                    <div className="p-4 bg-emerald-950/20 rounded-2xl border border-emerald-900/30 space-y-2">
+                      <div className="flex items-center space-x-2 text-emerald-300 font-semibold text-xs">
+                        <Code className="w-4 h-4 text-emerald-400" />
+                        <span>Zoom Event Webhook Endpoint</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        To receive live <strong>recording.completed</strong> webhook events, configure your Zoom App Webhook URL to:
+                      </p>
+                      <div className="flex items-center space-x-2 mt-1.5">
+                        <input 
+                          type="text" 
+                          readOnly 
+                          value={`${window.location.origin}/api/v1/zoom/webhook`}
+                          className="flex-1 bg-slate-900 border border-slate-800 text-[10px] font-mono text-slate-300 px-3 py-1.5 rounded-xl focus:outline-none"
+                        />
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/api/v1/zoom/webhook`);
+                            setZoomSuccessMessage("Webhook Endpoint copied!");
+                            setTimeout(() => setZoomSuccessMessage(null), 3000);
+                          }}
+                          className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-all cursor-pointer border border-slate-700"
+                          title="Copy Webhook URL"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Execution Engine & Logs (Span 5) */}
+                  <div className="md:col-span-5 space-y-4">
+                    <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-3 flex-1 flex flex-col min-h-[300px]">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2 text-slate-200 font-semibold text-xs">
+                          <Terminal className="w-4 h-4 text-blue-400" />
+                          <span>Synchronization Pipeline</span>
+                        </div>
+                        <span className="text-[9px] bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded-full font-mono font-bold animate-pulse border border-blue-500/20">
+                          Engine Live
+                        </span>
+                      </div>
+                      
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Triggers manual polling request to pull recent conversation recordings from Zoom API gateway into Spark's real-time transcript database.
+                      </p>
+
+                      <button
+                        onClick={triggerZoomManualSync}
+                        disabled={zoomSyncing || !zoomConnected}
+                        className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 shadow-md cursor-pointer ${
+                          zoomSyncing
+                            ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-750"
+                            : !zoomConnected
+                            ? "bg-slate-900 text-slate-600 cursor-not-allowed border border-slate-800/80"
+                            : "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30 border border-blue-500"
+                        }`}
+                      >
+                        <RefreshCw className={`w-4 h-4 ${zoomSyncing ? "animate-spin" : ""}`} />
+                        <span>{zoomSyncing ? "Connecting Gateway..." : "Trigger Manual Pull Sync"}</span>
+                      </button>
+
+                      {/* Sync History Logs */}
+                      <div className="flex-1 flex flex-col space-y-2 pt-2 border-t border-slate-800">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Real-time Pull Telemetry Logs:</span>
+                        
+                        <div className="bg-slate-900/70 border border-slate-800/80 rounded-xl p-3 flex-1 overflow-y-auto max-h-[220px] font-mono text-[9px] text-slate-300 space-y-2 scrollbar-thin">
+                          {zoomLogsLoading ? (
+                            <div className="flex items-center justify-center h-24 text-slate-500">
+                              <RefreshCw className="w-4 h-4 animate-spin text-blue-400 mr-2" />
+                              <span>Loading Telemetry...</span>
+                            </div>
+                          ) : zoomLogs.length === 0 ? (
+                            <div className="text-slate-500 italic text-center py-8">
+                              No synchronization runs recorded. Trigger manual sync or connect keys.
+                            </div>
+                          ) : (
+                            zoomLogs.map((log) => {
+                              const isSuccess = log.status === "success";
+                              return (
+                                <div key={log.id} className="border-b border-slate-850 pb-2 last:border-none last:pb-0">
+                                  <div className="flex items-center justify-between text-slate-400 font-bold">
+                                    <span>Sync #{log.id.slice(-4)}</span>
+                                    <span className={isSuccess ? "text-blue-400" : "text-rose-400"}>
+                                      {log.status.toUpperCase()}
+                                    </span>
+                                  </div>
+                                  <div className="text-[8.5px] text-slate-500 mt-0.5">
+                                    {new Date(log.timestamp).toLocaleString()}
+                                  </div>
+                                  <div className="text-slate-300 mt-1 leading-normal bg-slate-950/40 p-1.5 rounded border border-slate-900 font-sans">
+                                    {log.details}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+              </div>
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ==================== SECURE OAUTH HANDSHAKE SIMULATOR (DARK THEME) ==================== */}
+      <AnimatePresence>
+        {oauthModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            {/* Backdrop */}
+            <div 
+              className="absolute inset-0"
+              onClick={() => setOauthModalOpen(false)}
+            />
+            
+            {/* Modal Box */}
+            <div className="bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl w-full max-w-2xl overflow-hidden relative z-10 flex flex-col max-h-[90vh] animate-in fade-in-50 zoom-in-95 duration-200">
+              
+              {/* Header */}
+              <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/40">
+                <div className="flex items-center space-x-2.5">
+                  <div className={`p-1.5 rounded-lg ${oauthPlatform === 'zoom' ? 'bg-blue-500/10 text-blue-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                    <Globe className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-bold text-slate-100 text-sm">
+                      {oauthPlatform === 'zoom' ? 'Zoom App Authorization' : 'Google API OAuth Handshake'}
+                    </h3>
+                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                      Client ID: spark_client_id_{oauthPlatform}_prod
+                    </p>
+                  </div>
+                </div>
+                
+                <button 
+                  onClick={() => setOauthModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-200 p-1.5 hover:bg-slate-800 rounded-xl transition-all cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Handshake Progress Tracker */}
+              <div className="bg-slate-950 text-slate-400 px-6 py-3 border-b border-slate-850 flex items-center justify-between text-[10px] font-mono">
+                <div className="flex items-center gap-4">
+                  <span className={oauthStep >= 1 ? "text-emerald-400 font-bold" : "text-slate-600"}>1. Consent</span>
+                  <span className="text-slate-800">➔</span>
+                  <span className={oauthStep >= 2 ? "text-emerald-400 font-bold" : "text-slate-600"}>2. Auth Code</span>
+                  <span className="text-slate-800">➔</span>
+                  <span className={oauthStep >= 3 ? "text-emerald-400 font-bold" : "text-slate-600"}>3. Handshake Callback</span>
+                  <span className="text-slate-800">➔</span>
+                  <span className={oauthStep >= 4 ? "text-emerald-400 font-bold" : "text-slate-600"}>4. Exchange Token</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="text-[9px] uppercase tracking-wider text-emerald-400">Sandbox Active</span>
+                </div>
+              </div>
+
+              {/* Modal Content Scrollable Area */}
+              <div className="p-6 flex-1 overflow-y-auto space-y-6 text-slate-100">
+                
+                {oauthError && (
+                  <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl p-3 text-xs font-semibold flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>{oauthError}</span>
+                  </div>
+                )}
+
+                {/* Visual Auto-Retry and Exponential Backoff Control panel */}
+                {oauthStep > 1 && oauthStep < 4 && (
+                  <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4.5 space-y-3.5 shadow-xs">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/60 pb-3">
+                      <div>
+                        <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                          <Sliders className="w-4 h-4 text-blue-400" />
+                          API Connection Quality Control
+                        </span>
+                        <span className="text-[10px] text-slate-400 block mt-0.5">
+                          Toggle simulated network failures to observe background exponential backoff auto-retry.
+                        </span>
+                      </div>
+                      <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={simulateFlakyNetwork}
+                          onChange={(e) => setSimulateFlakyNetwork(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="relative w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-slate-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                        <span className="text-[10px] font-bold text-slate-300">Simulate Flakiness</span>
+                      </label>
+                    </div>
+
+                    {/* Active retry monitor */}
+                    {oauthIsRetrying && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3.5 space-y-2">
+                        <div className="flex items-center justify-between text-xs font-bold text-amber-400">
+                          <span className="flex items-center gap-1.5">
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                            Attempt {oauthRetryAttempt} of {oauthMaxAttempts}
+                          </span>
+                          {oauthCountdown > 0 ? (
+                            <span className="font-mono text-[10.5px] bg-amber-950 text-amber-300 px-2 py-0.5 rounded">
+                              Next attempt in {oauthCountdown.toFixed(1)}s
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-amber-500 font-mono">Connecting...</span>
+                          )}
+                        </div>
+                        {/* Interactive progress bar */}
+                        <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                          <div 
+                            className="bg-amber-500 h-1.5 transition-all duration-300"
+                            style={{ 
+                              width: `${(oauthRetryAttempt / oauthMaxAttempts) * 100}%` 
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Live log stream */}
+                    {oauthRetryLogs.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider">
+                            Handshake Transport Logs
+                          </span>
+                          <span className="text-[9px] font-mono text-blue-400 font-semibold bg-blue-950 px-1.5 py-0.5 rounded border border-blue-900/30">
+                            Strategy: Exponential Backoff (2^n)
+                          </span>
+                        </div>
+                        <div className="bg-slate-900 rounded-xl p-3.5 border border-slate-850 font-mono text-[10px] space-y-1.5 max-h-[160px] overflow-y-auto scrollbar-thin">
+                          {oauthRetryLogs.map((log, idx) => {
+                            const isError = log.includes("✕") || log.includes("Error") || log.includes("failed") || log.includes("Critical");
+                            const isSuccess = log.includes("succeeded") || log.includes("✓");
+                            const isAttempt = log.includes("Initiating");
+                            
+                            let color = "text-slate-300";
+                            if (isError) color = "text-rose-400";
+                            if (isSuccess) color = "text-emerald-400 font-bold";
+                            if (isAttempt) color = "text-blue-300";
+
+                            return (
+                              <div key={idx} className={`flex items-start gap-1.5 leading-relaxed ${color}`}>
+                                <span className="text-slate-600 shrink-0 select-none">›</span>
+                                <span className="break-all">{log}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* STEP 1: Consent Screen */}
+                {oauthStep === 1 && (
+                  <div className="space-y-5 animate-in fade-in duration-300">
+                    <div className="flex items-center justify-center py-6 gap-6">
+                      <div className="w-14 h-14 rounded-2xl bg-slate-950 text-white flex items-center justify-center font-display font-black text-xl shadow-md border border-slate-800">
+                        Sp
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-slate-600 font-mono text-sm leading-none">➔➔➔</span>
+                        <span className="text-[9px] font-mono text-slate-500 mt-1 uppercase tracking-wider">OAuth AuthCode</span>
+                      </div>
+                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center font-bold text-xl shadow-md border ${
+                        oauthPlatform === 'zoom' 
+                          ? 'bg-blue-950 text-blue-400 border-blue-900/40' 
+                          : 'bg-rose-950 text-rose-400 border-rose-900/40'
+                      }`}>
+                        {oauthPlatform === 'zoom' ? 'Z' : 'G'}
+                      </div>
+                    </div>
+
+                    <div className="text-center space-y-2">
+                      <h4 className="font-semibold text-slate-100 text-sm">
+                        Spark Dialogue Analytics wants to access your {oauthPlatform === 'zoom' ? 'Zoom' : 'Google'} Account
+                      </h4>
+                      <p className="text-[11px] text-slate-400 max-w-md mx-auto leading-relaxed">
+                        Authorize Spark to securely pull transcript payloads and conference call recordings to enable automatic dialogue persuasion analysis.
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Requested API Permissions (Scopes):</span>
+                      <ul className="space-y-2 text-xs text-slate-300 font-medium">
+                        {oauthPlatform === 'zoom' ? (
+                          <>
+                            <li className="flex items-start gap-2.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0" />
+                              <div>
+                                <span className="font-mono text-[11px] bg-slate-900 px-1 py-0.5 rounded font-bold text-slate-300 border border-slate-800">cloud_recording:read:list_user_recordings:admin</span>
+                                <span className="text-slate-400 block text-[10.5px] mt-0.5 font-sans">Required to list user cloud recordings across the account.</span>
+                              </div>
+                            </li>
+                            <li className="flex items-start gap-2.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0" />
+                              <div>
+                                <span className="font-mono text-[11px] bg-slate-900 px-1 py-0.5 rounded font-bold text-slate-300 border border-slate-800">recording:read:admin</span>
+                                <span className="text-slate-400 block text-[10.5px] mt-0.5 font-sans">Retrieve cloud-recorded transcripts and audio download links.</span>
+                              </div>
+                            </li>
+                          </>
+                        ) : (
+                          <>
+                            <li className="flex items-start gap-2.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-1.5 shrink-0" />
+                              <div>
+                                <span className="font-mono text-[11px] bg-slate-900 px-1 py-0.5 rounded font-bold text-slate-300 border border-slate-800">https://www.googleapis.com/auth/meet.readonly</span>
+                                <span className="text-slate-400 block text-[10.5px] mt-0.5">Read Google Meet meeting recordings, chat logs, and generated transcripts.</span>
+                              </div>
+                            </li>
+                            <li className="flex items-start gap-2.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-1.5 shrink-0" />
+                              <div>
+                                <span className="font-mono text-[11px] bg-slate-900 px-1 py-0.5 rounded font-bold text-slate-300 border border-slate-800">https://www.googleapis.com/auth/calendar.events.readonly</span>
+                                <span className="text-slate-400 block text-[10.5px] mt-0.5">Sync upcoming sales calls from Google Calendar events seamlessly.</span>
+                              </div>
+                            </li>
+                          </>
+                        )}
+                      </ul>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setOauthModalOpen(false)}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer border border-slate-700"
+                      >
+                        Cancel Connection
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleOAuthAuthorize}
+                        disabled={oauthLoading}
+                        className={`px-5 py-2 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs ${
+                          oauthPlatform === 'zoom' ? 'bg-blue-600 hover:bg-blue-750' : 'bg-rose-600 hover:bg-rose-750'
+                        }`}
+                      >
+                        {oauthLoading ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        )}
+                        <span>Authorize & Grant Scopes</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 2: Authorization Code Received */}
+                {oauthStep === 2 && (
+                  <div className="space-y-5 animate-in fade-in duration-300">
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl p-4">
+                      <span className="font-bold text-xs block">✓ Authorization Approved!</span>
+                      <span className="text-[10.5px] block mt-1 text-emerald-300">
+                        The resource owner granted permission. The OAuth server redirected to our registered <code>redirect_uri</code> with a single-use authorization code.
+                      </span>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
+                        Browser Callback Redirection Address (GET)
+                      </label>
+                      <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl flex items-center justify-between">
+                        <span className="font-mono text-[10.5px] text-slate-300 truncate max-w-[450px]">
+                          {window.location.origin}/api/v1/oauth/callback?code={oauthCode}&state=xyz_state_4917&platform={oauthPlatform}
+                        </span>
+                        <span className="text-[9px] font-mono bg-cyan-950 border border-cyan-900 text-cyan-400 px-2 py-0.5 rounded-full font-bold">
+                          HTTP 302
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-950 text-emerald-400 p-4 rounded-xl border border-slate-800 space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                        <span className="font-mono text-[10px] text-slate-500">Mock Handshake Webhook Logs</span>
+                        <span className="text-[9px] text-slate-600 font-mono">auth_server_handshake.go</span>
+                      </div>
+                      <pre className="font-mono text-[10px] text-emerald-400 leading-relaxed overflow-x-auto max-h-[140px] scrollbar-thin">
+                        <code>{`[INFO] OAuth Authorization Approved by User "tom.hansen2010@gmail.com"
+[INFO] Generating single-use code: "${oauthCode}" (expires in 10m)
+[DEBUG] Issuing browser HTTP 302 redirect back to customer applet...
+[DEBUG] Target location: /api/v1/oauth/callback
+[STATUS] Code generation complete. Ready for token trade sequence.`}</code>
+                      </pre>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+                      <button
+                        type="button"
+                        onClick={handleSimulateCallback}
+                        disabled={oauthLoading}
+                        className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        {oauthLoading ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Play className="w-3.5 h-3.5 text-cyan-400" />
+                        )}
+                        <span>Execute Browser Handshake Redirect</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 3: Exchange Code for Access Token */}
+                {oauthStep === 3 && (
+                  <div className="space-y-5 animate-in fade-in duration-300">
+                    <div className="bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-2xl p-4">
+                      <span className="font-bold text-xs block">⚡ Redirect Complete. Let's Exchange the Code</span>
+                      <span className="text-[10.5px] block mt-1 text-blue-300">
+                        Our server-side application successfully intercepted the authorization code. Now, we must perform a secure POST handshake to exchange this code for durable access credentials.
+                      </span>
+                    </div>
+
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
+                        Secure HTTP Handshake Payload (POST)
+                      </label>
+                      <div className="bg-slate-950 text-emerald-400 p-4 rounded-xl border border-slate-800 font-mono text-[10.5px] leading-relaxed">
+                        <div className="text-slate-500 mb-2">// POST /api/v1/oauth/token</div>
+                        <div>{"{"}</div>
+                        <div className="pl-4"><span className="text-emerald-300">"code"</span>: "{oauthCode}",</div>
+                        <div className="pl-4"><span className="text-emerald-300">"client_id"</span>: "spark_client_id_{oauthPlatform}",</div>
+                        <div className="pl-4"><span className="text-emerald-300">"client_secret"</span>: "spark_client_secret_{oauthPlatform}_f8b44ece36e877f8",</div>
+                        <div className="pl-4"><span className="text-emerald-300">"grant_type"</span>: "authorization_code",</div>
+                        <div className="pl-4"><span className="text-emerald-300">"platform"</span>: "{oauthPlatform}"</div>
+                        <div>{"}"}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+                      <button
+                        type="button"
+                        onClick={handleExchangeTokens}
+                        disabled={oauthLoading}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        {oauthLoading ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        )}
+                        <span>Exchange Authorization Code</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 4: Success, Connected! */}
+                {oauthStep === 4 && oauthTokenResponse && (
+                  <div className="space-y-5 animate-in fade-in duration-300">
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl p-4 text-center space-y-2">
+                      <span className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-lg mx-auto border border-emerald-500/30">✓</span>
+                      <h4 className="font-bold text-sm text-slate-100">OAuth Credentials Received Successfully!</h4>
+                      <p className="text-[10.5px] text-emerald-300 max-w-md mx-auto leading-relaxed">
+                        Handshake completed. Spark has securely stored the OAuth credentials. The service status is now marked as <strong>'Linked'</strong>.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
+                        Exchanged Access Token Response Payload
+                      </label>
+                      <pre className="font-mono text-[10px] text-emerald-400 bg-slate-950 p-4 rounded-xl overflow-x-auto max-h-[140px] border border-slate-800 leading-normal scrollbar-thin">
+                        <code>{JSON.stringify(oauthTokenResponse, null, 2)}</code>
+                      </pre>
+                    </div>
+
+                    <div className="flex items-center justify-end pt-4 border-t border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setOauthModalOpen(false)}
+                        className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl font-bold text-xs cursor-pointer shadow-xs"
+                      >
+                        Close & View Dashboard Status Badge
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            </div>
+          </div>
         )}
       </AnimatePresence>
 

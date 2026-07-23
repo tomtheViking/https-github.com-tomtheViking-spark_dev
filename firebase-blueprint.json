@@ -148,6 +148,10 @@
           "type": "string",
           "description": "The role assigned to the user (e.g. tenant_admin)."
         },
+        "is_super_admin": {
+          "type": "boolean",
+          "description": "Explicit boolean flag for Super Admin status (true for tenant_super_admin)."
+        },
         "enrollment_status": {
           "type": "string",
           "enum": ["invited", "active"],
@@ -214,6 +218,35 @@
         "severity": { "type": "string", "enum": ["critical", "warning", "info"] }
       },
       "required": ["id", "timestamp", "tenantId", "serviceComponent", "awsErrorCode", "diagnosticMessage", "severity"]
+    },
+    "ZoomSettings": {
+      "title": "ZoomSettings",
+      "description": "Zoom integration credentials and configurations.",
+      "type": "object",
+      "properties": {
+        "accountId": { "type": "string" },
+        "clientId": { "type": "string" },
+        "clientSecret": { "type": "string" },
+        "secretToken": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "pollingIntervalMinutes": { "type": "number" },
+        "lastSyncTimestamp": { "type": "string" }
+      },
+      "required": ["accountId", "clientId", "clientSecret", "secretToken", "enabled", "pollingIntervalMinutes"]
+    },
+    "ZoomSyncLog": {
+      "title": "ZoomSyncLog",
+      "description": "Synchronization logs for Zoom Cloud recording integration.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "status": { "type": "string" },
+        "callsIngested": { "type": "number" },
+        "type": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "status", "callsIngested", "type", "details"]
     }
   },
   "firestore": {
@@ -248,6 +281,14 @@
     "/alerts/{alertId}": {
       "schema": "TelemetryAlert",
       "description": "System telemetry and AWS service error logs collection."
+    },
+    "/zoom_settings/{docId}": {
+      "schema": "ZoomSettings",
+      "description": "Zoom integration credentials and configurations."
+    },
+    "/zoom_sync_logs/{logId}": {
+      "schema": "ZoomSyncLog",
+      "description": "Synchronization logs for Zoom Cloud recording integration."
     }
   }
 }

@@ -1,0 +1,12 @@
+{
+  "firestore": [
+    {
+      "database": "(default)",
+      "rules": "firestore.rules"
+    },
+    {
+      "database": "ai-studio-sparkanalytic-77f894c0-f2b2-4c88-a711-f8b44ece36e8",
+      "rules": "firestore.rules"
+    }
+  ]
+}

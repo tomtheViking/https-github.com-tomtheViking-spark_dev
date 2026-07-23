@@ -52,6 +52,7 @@ service cloud.firestore {
         request.resource.data.role is string &&
         request.resource.data.role.size() > 0 &&
         request.resource.data.role.size() <= 64 &&
+        (!("is_super_admin" in request.resource.data) || request.resource.data.is_super_admin is bool) &&
         request.resource.data.enrollment_status is string &&
         (request.resource.data.enrollment_status == "invited" || request.resource.data.enrollment_status == "active") &&
         request.resource.data.created_at is string &&
@@ -79,6 +80,26 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if isValidId(alertId) && request.resource.data.id == alertId;
       allow delete: if isValidId(alertId);
+    }
+
+    // Gong Settings Collection Rules
+    match /gong_settings/{docId} {
+      allow read, write: if true;
+    }
+
+    // Gong Sync Logs Collection Rules
+    match /gong_sync_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    // Zoom Settings Collection Rules
+    match /zoom_settings/{docId} {
+      allow read, write: if true;
+    }
+
+    // Zoom Sync Logs Collection Rules
+    match /zoom_sync_logs/{logId} {
+      allow read, write: if true;
     }
   }
 }
