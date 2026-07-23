@@ -58,6 +58,8 @@ import {
   Video,
   Sliders,
   Play,
+  UserPlus,
+  X,
   Loader2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -528,6 +530,18 @@ export default function SupportDashboard({
   const [awsSesInviteName, setAwsSesInviteName] = useState<string>("");
   const [awsSesSending, setAwsSesSending] = useState<boolean>(false);
   const [awsSesDispatchResult, setAwsSesDispatchResult] = useState<any>(null);
+
+  // Manual Spark Admin & Credentials Provisioning States (Bypass AWS SES Sandbox)
+  const [manualAdminModalOpen, setManualAdminModalOpen] = useState<boolean>(false);
+  const [manualAdminEmail, setManualAdminEmail] = useState<string>("clay@sparkanalytic.com");
+  const [manualAdminName, setManualAdminName] = useState<string>("Clay");
+  const [manualAdminRole, setManualAdminRole] = useState<string>("spark_admin");
+  const [manualAdminTenantId, setManualAdminTenantId] = useState<string>("tenant-master-admin");
+  const [manualAdminPassword, setManualAdminPassword] = useState<string>("ClaySpark2026!");
+  const [manualAdminShowPassword, setManualAdminShowPassword] = useState<boolean>(false);
+  const [manualAdminDirectActivate, setManualAdminDirectActivate] = useState<boolean>(true);
+  const [manualAdminSubmitting, setManualAdminSubmitting] = useState<boolean>(false);
+  const [manualAdminResult, setManualAdminResult] = useState<any>(null);
 
   // Call Diagnostics States & Handlers
   const [viewingDiagnosticSession, setViewingDiagnosticSession] = useState<CallSession | null>(null);
@@ -4429,6 +4443,34 @@ export default function SupportDashboard({
                     </div>
 
                     <div className="flex flex-col sm:flex-row items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setManualAdminName("Clay");
+                          setManualAdminEmail("clay@sparkanalytic.com");
+                          setManualAdminRole("spark_admin");
+                          setManualAdminTenantId("tenant-master-admin");
+                          setManualAdminPassword("ClaySpark2026!");
+                          setManualAdminDirectActivate(true);
+                          setManualAdminModalOpen(true);
+                        }}
+                        className="py-2 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shadow-sm"
+                      >
+                        <UserPlus className="w-3.5 h-3.5 text-amber-400" />
+                        <span>⚡ Quick Add Clay (clay@sparkanalytic.com)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setManualAdminModalOpen(true);
+                        }}
+                        className="py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-xs font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
+                      >
+                        <Key className="w-3.5 h-3.5 text-amber-400" />
+                        <span>🔑 Manual Provision (Bypass SES)</span>
+                      </button>
+
                       <div className="relative">
                         <input
                           type="text"
@@ -5972,6 +6014,21 @@ const sendEmailSmtp = async () => {
                     <div className="flex items-center space-x-2 shrink-0">
                       <button
                         onClick={() => {
+                          setManualAdminName("Clay");
+                          setManualAdminEmail("clay@sparkanalytic.com");
+                          setManualAdminRole("spark_admin");
+                          setManualAdminTenantId("tenant-master-admin");
+                          setManualAdminPassword("ClaySpark2026!");
+                          setManualAdminDirectActivate(true);
+                          setManualAdminModalOpen(true);
+                        }}
+                        className="py-1.5 px-3 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Key className="w-3.5 h-3.5 text-amber-400" />
+                        <span>⚡ Manual Admin Provisioning (Bypass SES)</span>
+                      </button>
+                      <button
+                        onClick={() => {
                           fetchAwsSesStatus();
                           setAwsSesModalOpen(true);
                         }}
@@ -6944,6 +7001,320 @@ const sendEmailSmtp = async () => {
                 </div>
               </div>
 
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ==================== SPARK ADMIN MANUAL PROVISIONING MODAL (BYPASS SES) ==================== */}
+      <AnimatePresence>
+        {manualAdminModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            <div 
+              className="absolute inset-0"
+              onClick={() => setManualAdminModalOpen(false)}
+            />
+            
+            <div className="bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl w-full max-w-2xl overflow-hidden relative z-10 flex flex-col max-h-[92vh] animate-in fade-in-50 zoom-in-95 duration-200">
+              
+              {/* Header */}
+              <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 font-bold text-sm border border-amber-500/20">
+                    <Key className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-bold text-slate-100 text-sm flex items-center gap-2">
+                      <span>Spark Admin Direct Provisioning</span>
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded font-mono font-bold">
+                        SES Sandbox Bypass Active
+                      </span>
+                    </h3>
+                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                      Manually define credentials and save admin access directly to Firestore & Auth
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setManualAdminModalOpen(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 space-y-5 overflow-y-auto font-sans">
+                {/* Notice Banner */}
+                <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="text-xs text-amber-200/90 leading-relaxed space-y-1">
+                    <p className="font-bold text-amber-300">AWS SES Sandbox Email Sending Restricted?</p>
+                    <p className="text-[11px] text-amber-100/80">
+                      Use this manual provisioning workflow to generate and store credentials directly in the system. You can set a custom password for <strong>clay@sparkanalytic.com</strong> and share it directly.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Quick Preset Buttons */}
+                <div className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800">
+                  <span className="text-[11px] font-bold text-slate-300 font-mono">⚡ One-Click Quick Preset:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManualAdminName("Clay");
+                      setManualAdminEmail("clay@sparkanalytic.com");
+                      setManualAdminRole("spark_admin");
+                      setManualAdminTenantId("tenant-master-admin");
+                      setManualAdminPassword("ClaySpark2026!");
+                      setManualAdminDirectActivate(true);
+                      setToast({ message: "Loaded preset details for Clay (clay@sparkanalytic.com)", type: "info" });
+                    }}
+                    className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <span>⚡ Load Clay (clay@sparkanalytic.com)</span>
+                  </button>
+                </div>
+
+                {/* Provisioning Form */}
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                        Admin Full Name
+                      </label>
+                      <input
+                        type="text"
+                        value={manualAdminName}
+                        onChange={(e) => setManualAdminName(e.target.value)}
+                        placeholder="e.g. Clay"
+                        className="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3.5 py-2.5 text-xs font-mono focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                        Admin Email Address
+                      </label>
+                      <input
+                        type="email"
+                        value={manualAdminEmail}
+                        onChange={(e) => setManualAdminEmail(e.target.value)}
+                        placeholder="clay@sparkanalytic.com"
+                        className="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3.5 py-2.5 text-xs font-mono focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                        Admin Role
+                      </label>
+                      <select
+                        value={manualAdminRole}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setManualAdminRole(val);
+                          if (val === "spark_admin" || val === "spark_super_admin") {
+                            setManualAdminTenantId("tenant-master-admin");
+                          }
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3.5 py-2.5 text-xs font-mono focus:outline-none focus:border-amber-400"
+                      >
+                        <option value="spark_admin">Spark System Admin (Master)</option>
+                        <option value="spark_super_admin">Spark Super Admin</option>
+                        <option value="tenant_admin">Tenant Administrator</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                        Tenant Scope ID
+                      </label>
+                      <input
+                        type="text"
+                        value={manualAdminTenantId}
+                        onChange={(e) => setManualAdminTenantId(e.target.value)}
+                        placeholder="tenant-master-admin"
+                        className="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3.5 py-2.5 text-xs font-mono focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Password Entry */}
+                  <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[10px] font-bold text-amber-300 uppercase tracking-wider font-mono">
+                        🔑 Admin Password / Passcode (Manual Input)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const randPass = `Spark!${Math.floor(1000 + Math.random() * 9000)}`;
+                          setManualAdminPassword(randPass);
+                          setToast({ message: `Generated new passcode: ${randPass}`, type: "info" });
+                        }}
+                        className="text-[10px] font-mono text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Randomize Passcode</span>
+                      </button>
+                    </div>
+
+                    <div className="relative">
+                      <input
+                        type={manualAdminShowPassword ? "text" : "password"}
+                        value={manualAdminPassword}
+                        onChange={(e) => setManualAdminPassword(e.target.value)}
+                        placeholder="Enter custom password..."
+                        className="w-full bg-slate-900 border border-amber-500/40 text-amber-300 font-mono font-bold rounded-xl pl-3.5 pr-20 py-2.5 text-xs focus:outline-none focus:border-amber-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setManualAdminShowPassword(!manualAdminShowPassword)}
+                        className="absolute right-3 top-2.5 text-[11px] font-mono text-slate-400 hover:text-white cursor-pointer"
+                      >
+                        {manualAdminShowPassword ? "Hide" : "Show"}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="checkbox"
+                        id="manualDirectActivate"
+                        checked={manualAdminDirectActivate}
+                        onChange={(e) => setManualAdminDirectActivate(e.target.checked)}
+                        className="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-amber-400 cursor-pointer"
+                      />
+                      <label htmlFor="manualDirectActivate" className="text-[11px] text-slate-300 font-mono cursor-pointer">
+                        Direct Account Activation (Mark status as <span className="text-emerald-400 font-bold">Active</span> immediately in Firestore)
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Submit Button */}
+                  <button
+                    type="button"
+                    disabled={manualAdminSubmitting || !manualAdminEmail.trim() || !manualAdminPassword.trim()}
+                    onClick={async () => {
+                      setManualAdminSubmitting(true);
+                      setManualAdminResult(null);
+                      try {
+                        const res = await fetch("/api/admin/manual-provision", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            email: manualAdminEmail.trim(),
+                            name: manualAdminName.trim() || manualAdminEmail.split("@")[0],
+                            role: manualAdminRole,
+                            tenantId: manualAdminTenantId.trim(),
+                            password: manualAdminPassword.trim(),
+                            directActivate: manualAdminDirectActivate
+                          })
+                        });
+                        const data = await res.json();
+                        setManualAdminResult(data);
+                        if (data.success) {
+                          setToast({ message: `Spark Admin (${manualAdminEmail}) credentials saved & provisioned!`, type: "success" });
+                        } else {
+                          setToast({ message: `Provisioning error: ${data.error || 'Failed'}`, type: "error" });
+                        }
+                      } catch (err: any) {
+                        console.error("Manual admin provision error:", err);
+                        setToast({ message: "Network error connecting to manual provision endpoint.", type: "error" });
+                      } finally {
+                        setManualAdminSubmitting(false);
+                      }
+                    }}
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/10 transition-all cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {manualAdminSubmitting ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Saving Admin Account to Firestore & Auth...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Save Admin Credentials & Provision Account</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Provisioning Result & Credentials Card */}
+                {manualAdminResult && manualAdminResult.success && (
+                  <div className="p-4 bg-emerald-950/40 border border-emerald-500/40 rounded-2xl space-y-3 animate-in fade-in-50">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <span className="font-bold font-mono text-emerald-300 text-xs">
+                          Admin Provisioning Complete
+                        </span>
+                      </div>
+                      <span className="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                        STATUS: ACTIVE
+                      </span>
+                    </div>
+
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2 font-mono text-xs text-slate-200">
+                      <div className="flex justify-between items-center pb-1 border-b border-slate-800">
+                        <span className="text-slate-400">Email:</span>
+                        <span className="font-bold text-amber-300">{manualAdminResult.user.email}</span>
+                      </div>
+                      <div className="flex justify-between items-center pb-1 border-b border-slate-800">
+                        <span className="text-slate-400">Role:</span>
+                        <span className="font-bold text-purple-300">{manualAdminResult.user.role}</span>
+                      </div>
+                      <div className="flex justify-between items-center pb-1 border-b border-slate-800">
+                        <span className="text-slate-400">Password / Passcode:</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-emerald-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                            {manualAdminResult.user.password}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(manualAdminResult.user.password);
+                              setToast({ message: "Password copied to clipboard!", type: "success" });
+                            }}
+                            className="p-1 text-slate-400 hover:text-white bg-slate-900 border border-slate-800 rounded cursor-pointer"
+                            title="Copy Password"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-400">Tenant ID:</span>
+                        <span className="text-rose-400 font-bold">{manualAdminResult.user.tenantId}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const summary = `Spark Analytic Admin Credentials
+--------------------------------
+Full Name: ${manualAdminResult.user.name}
+Email: ${manualAdminResult.user.email}
+Role: ${manualAdminResult.user.role}
+Password: ${manualAdminResult.user.password}
+Tenant Scope: ${manualAdminResult.user.tenantId}
+Status: ACTIVE
+Portal Login URL: ${manualAdminResult.user.activationUrl}`;
+                        navigator.clipboard.writeText(summary);
+                        setToast({ message: "Copied complete credentials summary to clipboard!", type: "success" });
+                      }}
+                      className="w-full py-2 bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 rounded-xl text-xs font-mono font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
+                    >
+                      <Copy className="w-4 h-4 text-amber-400" />
+                      <span>Copy Full Credentials Summary to Clipboard</span>
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

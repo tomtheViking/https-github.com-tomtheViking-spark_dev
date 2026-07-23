@@ -67,7 +67,8 @@ function AuthForm({ onSuccess, onSandboxLogin }: { onSuccess: () => void; onSand
     setError(null);
 
     const normalizedEmail = email.trim().toLowerCase();
-    const isMasterAdmin = (normalizedEmail === "tom@sparkanalytic.com" || normalizedEmail === "clay@sparkanalytic.com") && (password === "BoatBuilder2026!" || password === "SparkSecure2026!");
+    const isMasterAdmin = (normalizedEmail === "tom@sparkanalytic.com" || normalizedEmail === "clay@sparkanalytic.com") && 
+      (password === "BoatBuilder2026!" || password === "SparkSecure2026!" || password === "ClaySpark2026!");
 
     try {
       if (isMasterAdmin) {
@@ -80,7 +81,8 @@ function AuthForm({ onSuccess, onSandboxLogin }: { onSuccess: () => void; onSand
           displayName: name,
           email: normalizedEmail,
           tenant_id: "tenant-master-admin",
-          role: "tenant_admin",
+          role: "spark_admin",
+          is_super_admin: true,
           companyName: "Spark Master Admin Workspace",
         };
 
@@ -89,7 +91,8 @@ function AuthForm({ onSuccess, onSandboxLogin }: { onSuccess: () => void; onSand
             email: normalizedEmail,
             name,
             tenant_id: "tenant-master-admin",
-            role: "tenant_admin",
+            role: "spark_admin",
+            is_super_admin: true,
             enrollment_status: "active",
             created_at: new Date().toISOString()
           });
@@ -122,6 +125,34 @@ function AuthForm({ onSuccess, onSandboxLogin }: { onSuccess: () => void; onSand
         setFailedAttempts(0);
         onSuccess();
         return;
+      }
+
+      // Check Firestore provisioned users table for manual/SES fallback login
+      try {
+        const q = query(collection(db, "users"), where("email", "==", normalizedEmail));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const uData = snap.docs[0].data();
+          if (uData.password === password || uData.temporary_password === password || uData.enrollment_token) {
+            const fsUser = {
+              uid: snap.docs[0].id,
+              name: uData.name || normalizedEmail.split("@")[0],
+              displayName: uData.name || normalizedEmail.split("@")[0],
+              email: normalizedEmail,
+              tenant_id: uData.tenant_id || uData.tenantId || "tenant-master-admin",
+              role: uData.role || "spark_admin",
+              is_super_admin: uData.is_super_admin || uData.role === "spark_admin",
+              companyName: uData.companyName || "Spark Workspace",
+            };
+            localStorage.setItem("spark_sandbox_user", JSON.stringify(fsUser));
+            onSandboxLogin(fsUser);
+            setFailedAttempts(0);
+            onSuccess();
+            return;
+          }
+        }
+      } catch (fsSearchErr) {
+        console.warn("Firestore user lookup fallback note:", fsSearchErr);
       }
 
       await signInWithEmailAndPassword(auth, email.trim(), password.trim());

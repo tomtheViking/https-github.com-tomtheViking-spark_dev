@@ -1476,6 +1476,133 @@ export async function startServer() {
     }
   });
 
+  // API: Manual Spark Admin & User Provisioning (Bypasses AWS SES sandbox restrictions)
+  app.post("/api/admin/manual-provision", async (req, res) => {
+    try {
+      const { email, name, role, password, tenantId, directActivate } = req.body;
+
+      if (!email || typeof email !== "string" || !email.trim().includes("@")) {
+        res.status(400).json({ error: "Missing or invalid email address parameter." });
+        return;
+      }
+
+      const cleanEmail = email.trim();
+      const userName = name && name.trim() ? name.trim() : cleanEmail.split("@")[0];
+      const userRole = role || "spark_admin";
+      const tenantIdentifier = tenantId || (userRole === "spark_admin" ? "tenant-master-admin" : "CLIENT-A");
+      const userPassword = password && password.trim() ? password.trim() : (crypto.randomBytes(6).toString("hex") + "!Aa1");
+      const isDirectActive = directActivate !== false; // default true
+      const enrollmentToken = crypto.randomBytes(32).toString("hex");
+      const requestOrigin = req.headers.origin || `${req.protocol}://${req.headers.host}` || "https://app.sparkanalytic.com";
+      const activationUrl = `${requestOrigin}/enroll?token=${enrollmentToken}&email=${encodeURIComponent(cleanEmail)}`;
+
+      console.log(`[API Manual Admin Provision] Provisioning admin user ${cleanEmail} with role ${userRole}...`);
+
+      // 1. Check if user already exists in Firestore 'users' collection
+      const usersRef = collection(serverDb, "users");
+      const existingQuery = query(usersRef, where("email", "==", cleanEmail));
+      const snapshot = await getDocs(existingQuery);
+
+      let docId: string;
+      const userData = {
+        email: cleanEmail,
+        name: userName,
+        role: userRole,
+        is_super_admin: userRole === "spark_admin" || userRole === "spark_super_admin" || userRole === "tenant_super_admin",
+        tenant_id: tenantIdentifier,
+        tenantId: tenantIdentifier,
+        temporary_password: userPassword,
+        password: userPassword,
+        enrollment_status: isDirectActive ? "active" : "invited",
+        enrollment_token: enrollmentToken,
+        token_expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 Days
+        sparkId: "SPK-" + Math.floor(10000 + Math.random() * 90000),
+        manual_provisioned: true,
+        updated_at: new Date().toISOString()
+      };
+
+      if (!snapshot.empty) {
+        docId = snapshot.docs[0].id;
+        await updateDoc(doc(serverDb, "users", docId), userData);
+        console.log(`[API Manual Admin Provision] Updated existing Firestore user ${docId} for ${cleanEmail}`);
+      } else {
+        const newDocRef = await addDoc(usersRef, {
+          ...userData,
+          created_at: new Date().toISOString()
+        });
+        docId = newDocRef.id;
+        console.log(`[API Manual Admin Provision] Created new Firestore user ${docId} for ${cleanEmail}`);
+      }
+
+      // 2. Try Firebase Auth creation / password update if Firebase Admin is active
+      let firebaseAuthSuccess = false;
+      if (!(global as any).isIdentityToolkitDisabled) {
+        try {
+          const adminAuth = getAdminAuth();
+          let userRecord: any;
+          try {
+            userRecord = await adminAuth.getUserByEmail(cleanEmail);
+            await adminAuth.updateUser(userRecord.uid, {
+              password: userPassword,
+              displayName: userName
+            });
+          } catch (e) {
+            userRecord = await adminAuth.createUser({
+              email: cleanEmail,
+              password: userPassword,
+              displayName: userName,
+              emailVerified: true
+            });
+          }
+          firebaseAuthSuccess = true;
+        } catch (authErr: any) {
+          console.log(`[API Manual Admin Provision] Firebase Auth note: ${authErr.message || authErr}`);
+        }
+      }
+
+      // 3. Attempt optional AWS SES email dispatch as courtesy (catches any SES restriction errors silently)
+      let sesStatus = "bypassed_manual";
+      try {
+        const inviteResult = await inviteNewTenantUser(
+          cleanEmail,
+          tenantIdentifier,
+          userRole,
+          requestOrigin,
+          userPassword,
+          enrollmentToken,
+          userName
+        );
+        sesStatus = inviteResult.sesResult?.simulated ? "simulated" : "sent";
+      } catch (sesErr: any) {
+        console.log(`[API Manual Admin Provision] SES email suppressed/restricted: ${sesErr.message || sesErr}. Credentials saved to system.`);
+        sesStatus = "ses_restricted_bypassed";
+      }
+
+      res.json({
+        success: true,
+        message: `Admin account (${cleanEmail}) successfully provisioned and saved in system!`,
+        user: {
+          id: docId,
+          email: cleanEmail,
+          name: userName,
+          role: userRole,
+          tenantId: tenantIdentifier,
+          password: userPassword,
+          enrollmentStatus: isDirectActive ? "active" : "invited",
+          enrollmentToken: enrollmentToken,
+          activationUrl: activationUrl,
+          firebaseAuth: firebaseAuthSuccess,
+          sesStatus: sesStatus
+        }
+      });
+    } catch (err: any) {
+      console.error("[API Manual Admin Provision Error]:", err);
+      res.status(500).json({
+        error: `Failed to provision admin credentials: ${err.message || err}`
+      });
+    }
+  });
+
   // API: Validate registration token for enrollment
   app.post("/api/aws-ses/enroll/validate", async (req, res) => {
     try {
